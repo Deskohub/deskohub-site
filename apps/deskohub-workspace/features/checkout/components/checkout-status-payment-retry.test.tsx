@@ -8,9 +8,12 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import type { preparePaymentRetry } from "@/features/checkout/actions/prepare-payment-retry";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
+  type WorkspaceActionExecute,
   workspaceRouterPush,
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -19,6 +22,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { checkoutPaymentActionCallbacks } from "./checkout-payment.test-utils";
 
 mock.module("@/features/checkout/actions/prepare-payment-retry", () => ({
   preparePaymentRetry: mock(),
@@ -32,21 +36,15 @@ const { CheckoutStatusPaymentRetry } = await import(
   "./checkout-status-payment-retry"
 );
 
-type ActionOptions = {
-  readonly onSuccess: (result: { readonly data?: unknown }) => void;
-  readonly onError: (result: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type PaymentActionData = NonNullable<
+  Awaited<ReturnType<typeof preparePaymentRetry>>
+>["data"];
 
-const orderId = "reservation-retry" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("reservation-retry");
 
 const renderRetry = ({ isExecuting = false } = {}) => {
-  const execute = mock(
-    (_input: { readonly locale: string; readonly orderId: string }) => undefined
-  );
-  workspaceUseAction.mockReturnValue({ execute, isExecuting } as never);
+  const execute = mock<WorkspaceActionExecute>();
+  workspaceUseAction.mockReturnValue({ execute, isExecuting });
   const view = render(
     <CheckoutStatusPaymentRetry
       className="actions"
@@ -61,18 +59,20 @@ const renderRetry = ({ isExecuting = false } = {}) => {
       <a href="/en-US">home</a>
     </CheckoutStatusPaymentRetry>
   );
-  const options = () => {
-    const latest = workspaceUseAction.mock.calls.at(-1)?.[1] as
-      | ActionOptions
-      | undefined;
-    if (!latest) throw new Error("Retry action options missing");
-    return latest;
-  };
+  const options = checkoutPaymentActionCallbacks<PaymentActionData>(execute);
   const button = () =>
     view.container.querySelector("#checkout-status-try-payment-again");
   const fallback = () =>
     view.container.querySelector("#checkout-status-reserve-again");
-  return { button, execute, fallback, options, view };
+  const requiredButton = () => {
+    const element = button();
+    assert(
+      element instanceof HTMLButtonElement,
+      "Payment retry button missing"
+    );
+    return element;
+  };
+  return { button, execute, fallback, options, requiredButton, view };
 };
 
 describe("CheckoutStatusPaymentRetry", () => {
@@ -105,27 +105,28 @@ describe("CheckoutStatusPaymentRetry", () => {
   });
 
   test("asks to retry the order with only the order and locale", () => {
-    const { button, execute } = renderRetry();
+    const { requiredButton, execute } = renderRetry();
 
-    fireEvent.click(button() as HTMLButtonElement);
+    fireEvent.click(requiredButton());
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute.mock.calls[0]?.[0]).toEqual({ locale: "en-US", orderId });
   });
 
   test("is disabled while the request runs", () => {
-    const { button, execute } = renderRetry({ isExecuting: true });
+    const { requiredButton, execute } = renderRetry({ isExecuting: true });
 
-    expect((button() as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(button() as HTMLButtonElement);
+    expect(requiredButton().disabled).toBe(true);
+    fireEvent.click(requiredButton());
     expect(execute).not.toHaveBeenCalled();
   });
 
   test("opens the retry's Pay page as a new document", () => {
-    const { options } = renderRetry();
+    const { options, requiredButton } = renderRetry();
+    fireEvent.click(requiredButton());
 
     act(() => {
-      options().onSuccess({
+      options.onSuccess({
         data: { state: "ready", payUrl: "/en-US/checkout/pay?orderId=x" },
       });
     });
@@ -137,10 +138,11 @@ describe("CheckoutStatusPaymentRetry", () => {
   test.each(["refused", "spot_unavailable"] as const)(
     "puts the new reservation in the button's place when the retry is %s",
     (state) => {
-      const { button, fallback, options, view } = renderRetry();
+      const { button, fallback, options, requiredButton, view } = renderRetry();
+      fireEvent.click(requiredButton());
 
       act(() => {
-        options().onSuccess({ data: { state } });
+        options.onSuccess({ data: { state } });
       });
 
       expect(button()).toBeNull();
@@ -153,10 +155,11 @@ describe("CheckoutStatusPaymentRetry", () => {
   );
 
   test("only refreshes the status while the earlier payment may settle", () => {
-    const { button, fallback, options } = renderRetry();
+    const { button, fallback, options, requiredButton } = renderRetry();
+    fireEvent.click(requiredButton());
 
     act(() => {
-      options().onSuccess({ data: { state: "payment_settling" } });
+      options.onSuccess({ data: { state: "payment_settling" } });
     });
 
     expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
@@ -165,10 +168,11 @@ describe("CheckoutStatusPaymentRetry", () => {
   });
 
   test("shows a failure in its alert region", () => {
-    const { options, view } = renderRetry();
+    const { options, requiredButton, view } = renderRetry();
+    fireEvent.click(requiredButton());
 
     act(() => {
-      options().onTransportError();
+      options.onTransportError();
     });
 
     expect(view.getByRole("alert").textContent).not.toBe("");

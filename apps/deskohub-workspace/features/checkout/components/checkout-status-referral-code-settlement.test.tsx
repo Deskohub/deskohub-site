@@ -9,6 +9,7 @@ import {
   testPeekedStandings,
 } from "@/features/account/backend/current-customer-account.test-utils";
 import type { CheckoutStatusKind } from "@/features/checkout/checkout-status-kind";
+import type { IReferralService } from "@/features/referrals/referral.service";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -30,8 +31,8 @@ const runSettlement = async (
     value: Object.hasOwn(options, "cookie") ? options.cookie : "RFL12345",
   };
   const checks: { readonly dotyposCustomerId: string }[] = [];
-  const hasSettledReferral = mock(
-    ({ dotyposCustomerId }: { readonly dotyposCustomerId: string }) =>
+  const hasSettledReferral = mock<IReferralService["hasSettledReferral"]>(
+    ({ dotyposCustomerId }) =>
       Effect.sync(() => {
         checks.push({ dotyposCustomerId });
         return options.settled ?? true;
@@ -49,9 +50,7 @@ const runSettlement = async (
           Layer.provide(
             Layer.mergeAll(
               ReferralReleaseGate.fromDecision(true),
-              ReferralServiceMock({
-                hasSettledReferral: hasSettledReferral as never,
-              }),
+              ReferralServiceMock({ hasSettledReferral }),
               peeking(testPeekedStandings.linked)
             )
           )

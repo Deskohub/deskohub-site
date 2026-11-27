@@ -23,6 +23,7 @@ import { getWorkspaceOfficeProductTitle } from "@/features/checkout/product-cata
 import { readContactPrefill } from "@/features/contact/components/contact-page-link";
 import { type Locale, m } from "@/features/i18n";
 import { InviteeEmail } from "@/features/office/office-people";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatReservationDisplayDate } from "@/features/reservation/reservation-date";
 import { reservationInviteeIdSchema } from "@/features/reservation-invitees/reservation-invitee";
 import {
@@ -90,21 +91,23 @@ const { CheckoutStatusPage } = await import("./checkout-status-page");
 
 beforeEach(() => {
   workspaceUseAction.mockReturnValue({
-    execute: mock(),
+    execute: mock(() => undefined),
     isExecuting: false,
-  } as never);
+  });
 });
 
-const baseStatus: CheckoutStatusViewModel = {
+type CoworkStatus = Extract<CheckoutStatusViewModel, { kind: "cowork" }>;
+
+const baseStatus = {
   kind: "cowork",
-  orderId: "reservation-status-page",
+  orderId: workspaceReservationIdSchema.make("reservation-status-page"),
   returnOutcome: "success",
   status: "fulfilled",
   paymentStatus: "paid",
   fulfillmentStatus: "fulfilled",
-};
+} satisfies CoworkStatus;
 
-const reconstructedCoworkStatus: CheckoutStatusViewModel = {
+const reconstructedCoworkStatus = {
   ...baseStatus,
   summary: {
     kind: "cowork",
@@ -115,7 +118,7 @@ const reconstructedCoworkStatus: CheckoutStatusViewModel = {
     reservedUntil: Temporal.Instant.from("2026-06-20T22:00:00.000Z"),
     price: { value: 55_000, exponent: 2, currency: "CZK" },
   },
-};
+} satisfies CoworkStatus;
 
 /** Asserts the missing-address fallback: no address shown or prefilled. */
 const expectGuidanceWithoutAddress = (
@@ -504,13 +507,13 @@ describe("CheckoutStatusPage", () => {
   test("omits modal CTAs for not-found and pending states", () => {
     const statuses: CheckoutStatusViewModel[] = [
       {
-        orderId: "not-found-modal",
+        orderId: workspaceReservationIdSchema.make("not-found-modal"),
         returnOutcome: "unknown",
         status: "not_found",
       },
       {
         ...baseStatus,
-        orderId: "pending-modal",
+        orderId: workspaceReservationIdSchema.make("pending-modal"),
         status: "pending",
         paymentStatus: "pending",
         fulfillmentStatus: "not_started",
@@ -802,7 +805,7 @@ describe("CheckoutStatusPage", () => {
     }));
     const view = render(
       <CheckoutStatusPage
-        addInvitees={mock(async () => ({ status: "added", added: 1 }))}
+        addInvitees={mock(async () => ({ status: "added" as const, added: 1 }))}
         locale="en-US"
         resendInvitation={resendInvitation}
         status={{
@@ -1118,36 +1121,37 @@ describe("CheckoutStatusPage", () => {
   });
 
   test("propagates only allowlisted booking shape", () => {
+    const internalOrderFields = {
+      providerOrderId: "provider-order-id",
+      paymentAttemptId: "payment-attempt-id",
+      discountCode: "SECRET-DISCOUNT",
+      accessCode: "123456",
+      billing: {
+        companyName: "Sensitive Invoice Company",
+        taxId: "CZ12345678",
+      },
+    };
     const view = render(
       <CheckoutStatusPage
         locale="en-US"
-        status={
-          {
-            ...baseStatus,
-            orderId: "operational-order-id",
-            supportContactPrefill: {
-              name: "Sensitive Customer",
-              email: testEmailAddress("sensitive"),
-              phone: "+420777777777",
-            },
-            providerOrderId: "provider-order-id",
-            paymentAttemptId: "payment-attempt-id",
-            discountCode: "SECRET-DISCOUNT",
-            accessCode: "123456",
-            billing: {
-              companyName: "Sensitive Invoice Company",
-              taxId: "CZ12345678",
-            },
-            summary: {
-              kind: "cowork",
-              entryTier: "basic",
-              coffee: false,
-              reservedFrom: Temporal.Instant.from("2026-06-19T22:00:00Z"),
-              reservedUntil: Temporal.Instant.from("2026-06-20T22:00:00Z"),
-              price: { value: 35_000, exponent: 2, currency: "CZK" },
-            },
-          } as CheckoutStatusViewModel
-        }
+        status={{
+          ...baseStatus,
+          orderId: workspaceReservationIdSchema.make("operational-order-id"),
+          supportContactPrefill: {
+            name: "Sensitive Customer",
+            email: testEmailAddress("sensitive"),
+            phone: "+420777777777",
+          },
+          ...internalOrderFields,
+          summary: {
+            kind: "cowork",
+            entryTier: "basic",
+            coffee: false,
+            reservedFrom: Temporal.Instant.from("2026-06-19T22:00:00Z"),
+            reservedUntil: Temporal.Instant.from("2026-06-20T22:00:00Z"),
+            price: { value: 35_000, exponent: 2, currency: "CZK" },
+          },
+        }}
       />
     );
 
@@ -1411,30 +1415,26 @@ describe("CheckoutStatusPage", () => {
 
   describe("a paid reservation without a delivered confirmation", () => {
     const paidStatus = (
-      overrides: Partial<CheckoutStatusViewModel> & {
-        readonly status: CheckoutStatusViewModel["status"];
-      },
+      overrides: Pick<CoworkStatus, "status"> &
+        Partial<Pick<CoworkStatus, "paymentStatus" | "fulfillmentStatus">>,
       email: string | null = testEmailAddress("ada")
-    ) =>
-      ({
-        ...baseStatus,
+    ): CoworkStatus => ({
+      ...baseStatus,
+      fulfillmentStatus: "processing",
+      supportContactPrefill: {
+        name: "Ada Lovelace",
+        ...(email !== null && { email }),
+      },
+      summary: {
         kind: "cowork",
-        paymentStatus: "paid",
-        fulfillmentStatus: "processing",
-        supportContactPrefill: {
-          name: "Ada Lovelace",
-          ...(email !== null && { email }),
-        },
-        summary: {
-          kind: "cowork",
-          entryTier: "basic",
-          coffee: false,
-          reservedFrom: Temporal.Instant.from("2026-06-19T22:00:00.000Z"),
-          reservedUntil: Temporal.Instant.from("2026-06-20T22:00:00.000Z"),
-          price: { value: 35_000, exponent: 2, currency: "CZK" },
-        },
-        ...overrides,
-      }) as CheckoutStatusViewModel;
+        entryTier: "basic",
+        coffee: false,
+        reservedFrom: Temporal.Instant.from("2026-06-19T22:00:00.000Z"),
+        reservedUntil: Temporal.Instant.from("2026-06-20T22:00:00.000Z"),
+        price: { value: 35_000, exponent: 2, currency: "CZK" },
+      },
+      ...overrides,
+    });
     const queryRestartActions = (container: HTMLElement) => ({
       reserveAgain: container.querySelector("#checkout-status-reserve-again"),
       orderStep: container.querySelector("main ol > li:nth-child(1) > a"),
@@ -1897,7 +1897,7 @@ describe("CheckoutStatusPage payment page reopening", () => {
 
   const statusesWithoutPaymentPage: readonly CheckoutStatusViewModel[] = [
     {
-      orderId: "reservation-no-payment-page",
+      orderId: workspaceReservationIdSchema.make("reservation-no-payment-page"),
       returnOutcome: "unknown",
       status: "not_found",
     },

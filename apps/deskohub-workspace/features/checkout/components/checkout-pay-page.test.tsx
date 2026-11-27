@@ -10,8 +10,15 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  type RenderResult,
+  render,
+} from "@testing-library/react";
 import { Effect } from "effect";
 import {
   buildCoworkCheckoutSummary,
@@ -25,6 +32,7 @@ import { getOfficeAdvertisedPriceRequest } from "@/features/reservation/office-a
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import {
+  type WorkspaceActionExecute,
   workspaceRouterPush,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -32,6 +40,20 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { checkoutPaymentActionCallbacks } from "./checkout-payment.test-utils";
+import { openTestPaymentWindow } from "./payment-window-fixture";
+import type { StartCheckoutPaymentAction } from "./use-checkout-pay-submission";
+
+type PaymentActionData = Awaited<
+  ReturnType<StartCheckoutPaymentAction>
+>["data"];
+
+const getPaymentButton = (view: RenderResult, name: string | RegExp) => {
+  const button = view.getByRole("button", { name });
+  assert(button instanceof HTMLButtonElement, "Payment button missing");
+  return button;
+};
 
 const buildCoworkReservationQuote = (
   ...args: Parameters<typeof buildCoworkPriceQuote>
@@ -40,10 +62,6 @@ const buildCoworkReservationQuote = (
   summary: buildCoworkCheckoutSummary(...args),
 });
 
-const { submitWorkspaceReservation } = await import(
-  "@/features/reservation/actions/submit-reservation"
-);
-
 mock.module("server-only", () => ({}));
 const submitReservationActions = await import(
   "@/features/reservation/actions/submit-reservation"
@@ -51,7 +69,6 @@ const submitReservationActions = await import(
 mock.module("@/features/reservation/actions/submit-reservation", () => ({
   ...submitReservationActions,
   submitReservation: mock(),
-  submitWorkspaceReservation,
 }));
 
 // The early-performance request the pay consent adds when the service starts
@@ -73,7 +90,7 @@ const includesEarlyPerformanceRequest = (name: string) =>
 
 beforeEach(() => {
   workspaceUseAction.mockReturnValue({
-    execute: mock(),
+    execute: mock<WorkspaceActionExecute>(),
     isExecuting: false,
     result: {},
   });
@@ -158,15 +175,13 @@ describe("CheckoutPayPage payment navigation", () => {
 
   test("opens the payment gateway in a new tab and sends the original tab to status", async () => {
     const events: string[] = [];
-    const execute = mock(() => {
+    const execute = mock<WorkspaceActionExecute>(() => {
       events.push("execute");
     });
-    const paymentWindow = {
-      opener: window,
-    };
+    const paymentWindow = openTestPaymentWindow();
     const openPaymentWindow = spyOn(window, "open").mockImplementation(() => {
       events.push("open");
-      return paymentWindow as Window;
+      return paymentWindow;
     });
     workspaceUseAction.mockReturnValue({
       execute,
@@ -213,23 +228,14 @@ describe("CheckoutPayPage payment navigation", () => {
       earlyPerformanceConsent: true,
     });
 
-    const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
-      | {
-          readonly onSuccess: (result: {
-            readonly data: {
-              readonly status: "redirect";
-              readonly redirectUrl: string;
-              readonly statusUrl: string;
-            };
-          }) => void;
-        }
-      | undefined;
-    if (!actionOptions) throw new Error("Checkout action options missing");
+    const actionOptions =
+      checkoutPaymentActionCallbacks<PaymentActionData>(execute);
 
     act(() => {
       actionOptions.onSuccess({
         data: {
           status: "redirect",
+          message: "",
           redirectUrl: "https://payments.example.test/checkout",
           statusUrl: "/en-US/reservation/status/reservation-id",
         },
@@ -255,7 +261,7 @@ describe("CheckoutPayPage payment navigation", () => {
 
   test("starts QR with the same signed checkout and consents, then opens Workspace status", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
-    const execute = mock();
+    const execute = mock<WorkspaceActionExecute>();
     workspaceUseAction.mockReturnValue({
       execute,
       isExecuting: false,
@@ -277,12 +283,8 @@ describe("CheckoutPayPage payment navigation", () => {
     );
 
     const heading = view.getByRole("heading", { name: /Order and pay.*CZK/ });
-    const card = view.getByRole<HTMLButtonElement>("button", {
-      name: "Pay by card",
-    });
-    const qr = view.getByRole<HTMLButtonElement>("button", {
-      name: "Pay by QR",
-    });
+    const card = getPaymentButton(view, "Pay by card");
+    const qr = getPaymentButton(view, "Pay by QR");
     expect(view.queryByRole("radio")).toBeNull();
     expect(card.disabled).toBe(true);
     expect(qr.disabled).toBe(true);
@@ -309,17 +311,8 @@ describe("CheckoutPayPage payment navigation", () => {
       method: "qr",
     });
 
-    const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
-      | {
-          readonly onSuccess: (result: {
-            readonly data: {
-              readonly status: "qr_pending";
-              readonly statusUrl: string;
-            };
-          }) => void;
-        }
-      | undefined;
-    if (!actionOptions) throw new Error("Checkout action options missing");
+    const actionOptions =
+      checkoutPaymentActionCallbacks<PaymentActionData>(execute);
     act(() =>
       actionOptions.onSuccess({
         data: {
@@ -338,7 +331,7 @@ describe("CheckoutPayPage payment navigation", () => {
     "shows the Entry pack Pay path with coffee selected: %s",
     async (coffee) => {
       const { CheckoutPayPage } = await import("./checkout-pay-page");
-      const execute = mock();
+      const execute = mock<WorkspaceActionExecute>();
       workspaceUseAction.mockReturnValue({
         execute,
         isExecuting: false,
@@ -352,14 +345,25 @@ describe("CheckoutPayPage payment navigation", () => {
       const summary = {
         ...original,
         total,
-        sections: original.sections.map((section) => ({
-          ...section,
-          total,
-          items: section.items.map((item) => ({
-            ...item,
-            amount: "product" in item ? currencyCZK(0) : total,
-          })),
-        })),
+        sections: original.sections.map((section) =>
+          section.key === "order"
+            ? {
+                ...section,
+                total,
+                items: section.items.map((item) => ({
+                  ...item,
+                  amount: "product" in item ? currencyCZK(0) : total,
+                })),
+              }
+            : {
+                ...section,
+                total,
+                items: section.items.map((item) => ({
+                  ...item,
+                  amount: total,
+                })),
+              }
+        ),
       };
       const checkout = (earlyPerformanceRequestRequired: boolean) => (
         <CheckoutPayPage
@@ -384,9 +388,10 @@ describe("CheckoutPayPage payment navigation", () => {
         view.queryAllByText(/Card payment opens in a new tab/)
       ).toHaveLength(coffee ? 1 : 0);
       const button = () =>
-        view.getByRole<HTMLButtonElement>("button", {
-          name: coffee ? /^Order and pay CZK\s50$/ : "Book with 1 entry",
-        });
+        getPaymentButton(
+          view,
+          coffee ? /^Order and pay CZK\s50$/ : "Book with 1 entry"
+        );
       expect(button().disabled).toBe(true);
       fireEvent.click(button());
       expect(execute).not.toHaveBeenCalled();
@@ -427,7 +432,7 @@ describe("CheckoutPayPage payment navigation", () => {
 
   test("starts card directly and blocks both methods while card checkout starts", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
-    const execute = mock();
+    const execute = mock<WorkspaceActionExecute>();
     workspaceUseAction.mockReturnValue({
       execute,
       isExecuting: false,
@@ -463,12 +468,11 @@ describe("CheckoutPayPage payment navigation", () => {
       result: {},
     });
     view.rerender(checkout());
-    const pending = view.getByRole<HTMLButtonElement>("button", {
-      name: m.checkoutPaymentRetryPending({}, { locale: "en-US" }),
-    });
-    const qr = view.getByRole<HTMLButtonElement>("button", {
-      name: "Pay by QR",
-    });
+    const pending = getPaymentButton(
+      view,
+      m.checkoutPaymentRetryPending({}, { locale: "en-US" })
+    );
+    const qr = getPaymentButton(view, "Pay by QR");
     expect(pending.disabled).toBe(true);
     expect(pending.getAttribute("aria-busy")).toBe("true");
     expect(qr.disabled).toBe(true);
@@ -476,6 +480,12 @@ describe("CheckoutPayPage payment navigation", () => {
   });
 
   test("announces a payment start failure as an alert", async () => {
+    const execute = mock<WorkspaceActionExecute>();
+    workspaceUseAction.mockReturnValue({
+      execute,
+      isExecuting: false,
+      result: {},
+    });
     const { CheckoutPayPage } = await import("./checkout-pay-page");
     const quote = buildCoworkReservationQuote({
       entryTier: "basic",
@@ -490,11 +500,18 @@ describe("CheckoutPayPage payment navigation", () => {
       />
     );
     expect(view.queryByRole("alert")).toBeNull();
+    fireEvent.click(view.getByRole("checkbox"));
+    fireEvent.click(
+      view.getByRole("button", {
+        name: m.checkoutPayOrderAndPayAmountButton(
+          { amount: formatMoney(quote.summary.total, "en-US") },
+          { locale: "en-US" }
+        ),
+      })
+    );
 
-    const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
-      | { readonly onTransportError: () => void }
-      | undefined;
-    if (!actionOptions) throw new Error("Checkout action options missing");
+    const actionOptions =
+      checkoutPaymentActionCallbacks<PaymentActionData>(execute);
 
     act(() => {
       actionOptions.onTransportError();
@@ -537,8 +554,9 @@ describe("CheckoutPayPage payment navigation", () => {
 
   test("does not open a payment tab for an internal zero-total checkout", async () => {
     const openPaymentWindow = spyOn(window, "open");
+    const execute = mock<WorkspaceActionExecute>();
     workspaceUseAction.mockReturnValue({
-      execute: mock(),
+      execute,
       isExecuting: false,
       result: {},
     });
@@ -563,23 +581,14 @@ describe("CheckoutPayPage payment navigation", () => {
       })
     );
 
-    const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
-      | {
-          readonly onSuccess: (result: {
-            readonly data: {
-              readonly status: "redirect";
-              readonly redirectUrl: string;
-              readonly statusUrl?: string;
-            };
-          }) => void;
-        }
-      | undefined;
-    if (!actionOptions) throw new Error("Checkout action options missing");
+    const actionOptions =
+      checkoutPaymentActionCallbacks<PaymentActionData>(execute);
 
     act(() => {
       actionOptions.onSuccess({
         data: {
           status: "redirect",
+          message: "",
           redirectUrl:
             "/en-US/reservation/status/reservation-id?outcome=success",
         },
@@ -660,12 +669,12 @@ describe("CheckoutPayPage provider handoff", () => {
   test("reviews who is coming to an office and prices each person", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
     const inviteeEmail = testEmailAddress("jana.novak");
-    const startsOn = "2026-11-18";
+    const startsOn = plainDateStringSchema.make("2026-11-18");
     const request = getOfficeAdvertisedPriceRequest({
       locale: "en-US",
       seats: 2,
-      startsOn: startsOn as never,
-      endsOn: startsOn as never,
+      startsOn,
+      endsOn: startsOn,
     });
     const quote = Effect.runSync(
       buildOfficeReservationQuote(request.reservation.details)
