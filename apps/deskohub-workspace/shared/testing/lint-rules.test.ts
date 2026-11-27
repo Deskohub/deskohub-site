@@ -1221,6 +1221,9 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/account/backend/probe.test.ts",
   "apps/deskohub-workspace/features/account/backend/probe.test-utils.ts",
   "apps/deskohub-workspace/features/account/backend/probe.fixture.ts",
+  "apps/deskohub-workspace/features/account/backend/auth/probe.test.ts",
+  "apps/deskohub-workspace/features/account/backend/auth/probe.fixture.ts",
+  "apps/deskohub-workspace/features/account/backend/auth/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/account/probe.test.ts",
   "apps/deskohub-workspace/features/account/probe.fixture.ts",
   "apps/deskohub-workspace/features/account/components/probe.test.tsx",
@@ -1267,8 +1270,6 @@ const generatedProbes = [
 // Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
-  "apps/deskohub-workspace/features/account/backend/auth/probe.test.ts",
-  "apps/deskohub-workspace/features/account/backend/auth/probe.fixture.ts",
   "apps/deskohub-workspace/features/email-campaigns/backend/probe.test.ts",
   "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/email-campaigns/probe.test.ts",

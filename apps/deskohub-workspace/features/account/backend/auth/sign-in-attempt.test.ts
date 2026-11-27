@@ -2,6 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Effect, Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   type CapturedMagicLink,
   callHandler,
@@ -40,6 +41,10 @@ type CodeSignInBody = {
 };
 
 /** Status bodies, including entries of the wrong kind the endpoint refuses. */
+const decodeAttemptStatus = Schema.decodeUnknownSync(
+  Schema.Struct({ completed: Schema.Boolean })
+);
+
 type StatusBody = { readonly attempts: ReadonlyArray<string | number> };
 
 const postJson = (
@@ -82,7 +87,7 @@ const attemptsFor = ({ signInCodes = false } = {}) => {
     return {
       json,
       answer: Schema.decodeUnknownSync(sendAnswer)(json),
-      link: sentLinks.at(-1)!,
+      link: requireValue(sentLinks.at(-1), "sent magic link"),
     };
   };
 
@@ -113,8 +118,10 @@ const attemptsFor = ({ signInCodes = false } = {}) => {
     };
   };
 
-  const completed = async (attempts: readonly string[]) =>
-    ((await status(attempts)).body as { completed: boolean }).completed;
+  const completed = async (attempts: readonly string[]) => {
+    const body: unknown = (await status(attempts)).body;
+    return decodeAttemptStatus(body).completed;
+  };
 
   return { auth, send, sendForApp, verifyInApp, status, completed };
 };
@@ -262,7 +269,9 @@ describe("sign-in attempts", () => {
   test("stay open when the app refuses to switch accounts", async () => {
     const { sendForApp, verifyInApp, completed } = attemptsFor();
     const signedIn = await verifyInApp((await sendForApp()).link);
-    const cookie = cookieJar(getSessionCookie(signedIn)!);
+    const cookie = cookieJar(
+      requireValue(getSessionCookie(signedIn), "session cookie")
+    );
     const { attempt, link } = await sendForApp();
 
     const refused = await verifyInApp(link, cookie);

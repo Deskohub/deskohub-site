@@ -20,11 +20,23 @@ import {
 } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { magicLink } from "better-auth/plugins";
+import { Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   encodeAuthCallbackReturn,
   readAuthCallbackReturnTo,
   signInCallbackReturnParam,
 } from "../../routes";
+
+const decodeObservedSession = Schema.decodeUnknownSync(
+  Schema.NullOr(
+    Schema.Struct({
+      user: Schema.optionalKey(
+        Schema.Struct({ emailVerified: Schema.optionalKey(Schema.Boolean) })
+      ),
+    })
+  )
+);
 
 const authReturnFirstAddress = testEmailAddress("auth-return-first");
 const authReturnNoAckAddress = testEmailAddress("auth-return-no-ack");
@@ -255,12 +267,12 @@ const makeFixtureServer = async (
           }
 
           const response = await authHandler(request);
-          const body = (await response
-            .clone()
-            .json()
-            .catch(() => null)) as {
-            readonly user?: { readonly emailVerified?: boolean };
-          } | null;
+          const body = decodeObservedSession(
+            await response
+              .clone()
+              .json()
+              .catch(() => null)
+          );
           if (body?.user?.emailVerified === true) {
             observations.verifiedSessionResponses += 1;
             observations.events.push("get-session-verified");
@@ -532,7 +544,7 @@ const startMagicLink = async (
   );
   expect(accepted).toBe(true);
   await waitUntil("captured magic link", () => server.links.length > linkIndex);
-  return server.links[linkIndex]!;
+  return requireValue(server.links[linkIndex], "sent magic link");
 };
 
 const callbackURLFromLink = (link: CapturedMagicLink) => {
