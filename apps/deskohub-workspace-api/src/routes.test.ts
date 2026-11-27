@@ -11,7 +11,11 @@ import { HttpRouter } from "effect/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { workspaceHttpRouterOptions } from "./http-server";
 import { workspaceRoutes } from "./routes";
-import { workspaceRpcOptions } from "./rpc-options";
+import {
+  previewRpcPath,
+  type WorkspaceRpcPath,
+  workspaceRpcOptions,
+} from "./rpc-options";
 
 const directUrl = "postgresql://ep-synthetic.eu.aws.neon.tech/workspace";
 const pooledUrl =
@@ -27,6 +31,10 @@ const binding = {
   databaseEndpoint,
 };
 const generation = previewRuntimeGeneration(binding);
+const earlierGeneration = previewRuntimeGeneration({
+  ...binding,
+  deploymentId: "dpl_earlier",
+});
 const workerTag = "g-0123456789abcdef";
 const revision = `workspace-api-preview-${workerTag}`;
 const routingEnvironment = {
@@ -37,7 +45,7 @@ const routingEnvironment = {
   WORKSPACE_PREVIEW_BRANCH_TAG: binding.branchTag,
   WORKSPACE_PREVIEW_NEON_BRANCH_ID: "br-synthetic",
   WORKSPACE_PREVIEW_DATABASE_ENDPOINT: binding.databaseEndpoint,
-  WORKSPACE_PREVIEW_WORKER_ORIGIN: `https://${workerTag}---workspace-tasks-worker-preview-123.europe-west1.run.app`,
+  WORKSPACE_PREVIEW_WORKER_ORIGIN: `https://${workerTag}---workspace-tasks-preview-123456789012.europe-west1.run.app`,
   K_REVISION: revision,
   DATABASE_URL: pooledUrl,
 };
@@ -64,10 +72,12 @@ const startRoutes = (environment: Record<string, string | undefined> = {}) => {
       });
     })
   );
-  const rpcRoutes = RpcServer.layerHttp({
-    ...workspaceRpcOptions,
-    group: EchoRpcs,
-  }).pipe(Layer.provide(Layer.merge(handlers, RpcSerialization.layerJson)));
+  const rpcRoutes = (path: WorkspaceRpcPath) =>
+    RpcServer.layerHttp({
+      ...workspaceRpcOptions,
+      path,
+      group: EchoRpcs,
+    }).pipe(Layer.provide(Layer.merge(handlers, RpcSerialization.layerJson)));
 
   return {
     ...HttpRouter.toWebHandler(
@@ -90,8 +100,11 @@ const startRoutes = (environment: Record<string, string | undefined> = {}) => {
   };
 };
 
-const rpcRequest = (expected?: string) =>
-  new Request("http://localhost/rpc", {
+const rpcRequest = (
+  expected?: string,
+  path: WorkspaceRpcPath = previewRpcPath
+) =>
+  new Request(`http://localhost${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -125,7 +138,7 @@ test("preview RPC rejects missing, stale and duplicate generations before readin
   try {
     for (const expected of [
       undefined,
-      "f".repeat(64),
+      earlierGeneration,
       `${generation}, ${generation}`,
     ]) {
       const request = rpcRequest(expected);
@@ -135,6 +148,11 @@ test("preview RPC rejects missing, stale and duplicate generations before readin
       expect(request.bodyUsed).toBe(false);
       expect(server.handledMessages).toEqual([]);
     }
+
+    const legacy = rpcRequest(undefined, workspaceRpcOptions.path);
+    expect((await server.handler(legacy)).status).toBe(404);
+    expect(legacy.bodyUsed).toBe(false);
+    expect(server.handledMessages).toEqual([]);
 
     const request = rpcRequest(generation);
     const response = await server.handler(request);
@@ -168,11 +186,20 @@ test.each([
     "WORKSPACE_PREVIEW_WORKER_ORIGIN",
     `${routingEnvironment.WORKSPACE_PREVIEW_WORKER_ORIGIN}/rpc`,
   ],
+  [
+    "WORKSPACE_PREVIEW_WORKER_ORIGIN",
+    `https://${workerTag}---workspace-api-preview-123.europe-west1.run.app`,
+  ],
+  [
+    "WORKSPACE_PREVIEW_WORKER_ORIGIN",
+    `https://${workerTag}---workspace-tasks-preview-shadow-123.europe-west1.run.app`,
+  ],
   ["K_REVISION", undefined],
-  ["K_REVISION", `workspace-tasks-worker-preview-${workerTag}`],
+  ["K_REVISION", `workspace-tasks-preview-${workerTag}`],
   ["DATABASE_URL", "postgresql://ep-stale.eu.aws.neon.tech/workspace"],
   ["DATABASE_URL", `${directUrl}?%68ost=ep-stale.eu.aws.neon.tech`],
   ["DATABASE_URL", `${directUrl}?dbname=other`],
+  ["DATABASE_URL", `${directUrl}?options=-c%20search_path%3Dother`],
   ["DATABASE_URL", `${directUrl}?port=5433`],
   ["DATABASE_URL", directUrl.replace("/workspace", ":5433/workspace")],
   ["DATABASE_URL", undefined],
@@ -200,10 +227,14 @@ test.each([
   }
 );
 
-test.each(["api", "tasks-worker", "scheduler-worker"])(
+test.each([
+  ["api", "workspace-api-preview"],
+  ["tasks-worker", "workspace-tasks-preview"],
+  ["scheduler-worker", "workspace-scheduler-preview"],
+])(
   "preview %s probe returns only the expected generation proof",
-  async (role) => {
-    const cloudRunRevision = `workspace-${role}-preview-${workerTag}`;
+  async (role, service) => {
+    const cloudRunRevision = `${service}-${workerTag}`;
     const server = startRoutes({
       WORKSPACE_SERVICE_ROLE: role,
       K_REVISION: cloudRunRevision,
@@ -242,12 +273,18 @@ test.each([undefined, "production", "sandbox"])(
     });
     try {
       for (const supplied of [generation, ""]) {
-        const request = rpcRequest(supplied);
+        const request = rpcRequest(supplied, workspaceRpcOptions.path);
         expect((await server.handler(request)).status).toBe(503);
         expect(request.bodyUsed).toBe(false);
         expect(server.handledMessages).toEqual([]);
       }
-      const response = await server.handler(rpcRequest());
+      const preview = rpcRequest(generation);
+      expect((await server.handler(preview)).status).toBe(404);
+      expect(preview.bodyUsed).toBe(false);
+      expect(server.handledMessages).toEqual([]);
+      const response = await server.handler(
+        rpcRequest(undefined, workspaceRpcOptions.path)
+      );
       expect(response.status).toBe(200);
       expect(response.headers.get(previewGenerationHeader)).toBeNull();
       expect(server.handledMessages).toEqual(["dispatched"]);

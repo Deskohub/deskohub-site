@@ -18,21 +18,23 @@ import {
   workspaceHttpRouterOptions,
 } from "./http-server";
 import { workspaceRoutes } from "./routes";
-import { workspaceRpcOptions } from "./rpc-options";
+import { type WorkspaceRpcPath, workspaceRpcOptions } from "./rpc-options";
 
-const apiRoutes = RpcServer.layerHttp({
-  ...workspaceRpcOptions,
-  group: EmailPreferencesRpcs,
-}).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      WorkspaceRpcHandlers,
-      CallerContextLive,
-      WorkspaceRpcSerialization
-    )
-  ),
-  Layer.provide(WorkspaceBackendLive)
-);
+const apiRoutes = (path: WorkspaceRpcPath) =>
+  RpcServer.layerHttp({
+    ...workspaceRpcOptions,
+    path,
+    group: EmailPreferencesRpcs,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        WorkspaceRpcHandlers,
+        CallerContextLive,
+        WorkspaceRpcSerialization
+      )
+    ),
+    Layer.provide(WorkspaceBackendLive)
+  );
 
 runWorkspaceServer(
   HttpRouter.serve(workspaceRoutes(apiRoutes), workspaceHttpRouterOptions).pipe(

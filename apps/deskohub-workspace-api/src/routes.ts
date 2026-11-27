@@ -6,12 +6,21 @@ import {
   previewDatabaseEndpoint,
   previewGenerationHeader,
   previewRuntimeGeneration,
-  taggedCloudRunOrigin,
 } from "@deskohub/workspace-cloud-run/preview-generation";
 import { WorkspaceServiceRole } from "@deskohub/workspace-cloud-run/service-role";
 import { Config, Effect, Layer, Redacted } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { workspaceRpcOptions } from "./rpc-options";
+import {
+  previewRpcPath,
+  type WorkspaceRpcPath,
+  workspaceRpcOptions,
+} from "./rpc-options";
+
+const previewServices = {
+  api: "workspace-api-preview",
+  "tasks-worker": "workspace-tasks-preview",
+  "scheduler-worker": "workspace-scheduler-preview",
+} satisfies Record<WorkspaceServiceRole, string>;
 
 const previewBinding = Config.all({
   commitSha: Config.schema(
@@ -43,7 +52,7 @@ const previewProof = (role: WorkspaceServiceRole) =>
     const workerOrigin = yield* Config.String(
       "WORKSPACE_PREVIEW_WORKER_ORIGIN"
     );
-    const revisionPrefix = `workspace-${role}-preview-`;
+    const revisionPrefix = `${previewServices[role]}-`;
     const workerTag = cloudRunRevision.slice(revisionPrefix.length);
     if (
       !cloudRunRevision.startsWith(revisionPrefix) ||
@@ -52,13 +61,13 @@ const previewProof = (role: WorkspaceServiceRole) =>
       return undefined;
     }
 
-    const prefix = `https://${workerTag}---`;
+    // Only deterministic Cloud Run URLs identify the service in the hostname.
+    const workerOriginPrefix = `https://${workerTag}---${previewServices["tasks-worker"]}-`;
     if (
-      !workerOrigin.startsWith(prefix) ||
-      taggedCloudRunOrigin(
-        `https://${workerOrigin.slice(prefix.length)}`,
-        workerTag
-      ) !== workerOrigin
+      !workerOrigin.startsWith(workerOriginPrefix) ||
+      !/^[0-9]{1,12}\.europe-west1\.run\.app$/.test(
+        workerOrigin.slice(workerOriginPrefix.length)
+      )
     ) {
       return undefined;
     }
@@ -74,6 +83,7 @@ const previewProof = (role: WorkspaceServiceRole) =>
         url.searchParams.has("host") ||
         url.searchParams.has("port") ||
         url.searchParams.has("dbname") ||
+        url.searchParams.has("options") ||
         previewDatabaseEndpoint(connectionString) !== binding.databaseEndpoint
       ) {
         return undefined;
@@ -104,7 +114,9 @@ export const rejectPreviewGeneration = HttpRouter.middleware((httpEffect) =>
   )
 ).layer;
 
-export const workspaceRoutes = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
+export const workspaceRoutes = <E, R>(
+  apiRoutes: (path: WorkspaceRpcPath) => Layer.Layer<never, E, R>
+) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const role = yield* Config.schema(
@@ -119,20 +131,22 @@ export const workspaceRoutes = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
         HttpRouter.add("GET", "/healthz", health),
         HttpRouter.add("GET", "/health", health)
       );
-      // Worker handlers move to Cloud Run in their own cutovers.
-      const roleRoutes = role === "api" ? apiRoutes : Layer.empty;
       if (stage !== "preview") {
-        return Layer.merge(
-          healthRoutes,
-          roleRoutes.pipe(Layer.provide(rejectPreviewGeneration))
-        );
+        return role === "api"
+          ? Layer.merge(
+              healthRoutes,
+              apiRoutes(workspaceRpcOptions.path).pipe(
+                Layer.provide(rejectPreviewGeneration)
+              )
+            )
+          : healthRoutes;
       }
 
       const proof = yield* previewProof(role);
       if (!proof) {
         const rpcUnavailable =
           role === "api"
-            ? HttpRouter.add("POST", workspaceRpcOptions.path, unavailable)
+            ? HttpRouter.add("POST", previewRpcPath, unavailable)
             : Layer.empty;
         return Layer.mergeAll(
           healthRoutes,
@@ -161,6 +175,9 @@ export const workspaceRoutes = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
         probePath,
         HttpServerResponse.json(proof, { headers: privateHeaders })
       );
+      // Worker handlers move to Cloud Run in their own cutovers.
+      const roleRoutes =
+        role === "api" ? apiRoutes(previewRpcPath) : Layer.empty;
       return Layer.merge(
         healthRoutes,
         Layer.merge(roleRoutes, probe).pipe(Layer.provide(requireGeneration))
