@@ -280,7 +280,10 @@ describe("PayableCheckout.reconfirm", () => {
   });
 
   test("confirms an order-bound state's order while it awaits its retry, without a session id", async () => {
-    const stored = row({ activePaymentAttemptId: null });
+    const stored = row({
+      activePaymentAttemptId: null,
+      paymentState: "failed",
+    });
     const { result } = await reconfirm({ state: orderBound, stored });
 
     expect(result).toMatchObject({
@@ -303,6 +306,7 @@ describe("PayableCheckout.reconfirm", () => {
       input: {
         stored: row({
           activePaymentAttemptId: paymentAttemptIdSchema.make("retry-attempt"),
+          paymentState: "pending",
         }),
       },
       reason: "retried_attempt_replaced",
@@ -310,7 +314,7 @@ describe("PayableCheckout.reconfirm", () => {
     {
       name: "once a newer order replaced it in its session",
       input: {
-        stored: row({ activePaymentAttemptId: null }),
+        stored: row({ activePaymentAttemptId: null, paymentState: "failed" }),
         current: row({
           id: workspaceReservationIdSchema.make("replacement-id"),
         }),
@@ -320,7 +324,7 @@ describe("PayableCheckout.reconfirm", () => {
     {
       name: "once a later retry's attempt became the order's newest",
       input: {
-        stored: row({ activePaymentAttemptId: null }),
+        stored: row({ activePaymentAttemptId: null, paymentState: "failed" }),
         newestAttemptId: paymentAttemptIdSchema.make("later-attempt-id"),
       },
       reason: "retried_attempt_replaced",

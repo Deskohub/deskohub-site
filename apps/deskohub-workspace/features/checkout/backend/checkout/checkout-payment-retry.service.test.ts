@@ -69,7 +69,7 @@ import {
 } from "./payment-retry-provider-check";
 import { PaymentRetryUnavailableError } from "./payment-retry-unavailable";
 
-import { latePaymentRecoveryFixture } from "./testing/checkout-payment.fixture";
+import { latePaymentRecoveryFixture } from "./testing/checkout-payment-fixture";
 
 const orderId = workspaceReservationIdSchema.make(
   "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5"

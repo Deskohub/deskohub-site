@@ -10,7 +10,7 @@ import {
   failedCheckoutStatusRead,
   fulfilledCheckoutStatus,
   statusPageAuthorizationFixture,
-} from "./testing/checkout-status.fixture";
+} from "./testing/checkout-status-fixture";
 
 const input = {
   accessCookie: undefined,

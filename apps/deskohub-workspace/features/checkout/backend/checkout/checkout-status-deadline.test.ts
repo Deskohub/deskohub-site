@@ -39,9 +39,9 @@ import {
 import {
   checkoutDotyposReservationId,
   paymentAttemptWithPageFixture,
-} from "./testing/checkout-payment.fixture";
+} from "./testing/checkout-payment-fixture";
 
-import { statusPageAuthorizationFixture } from "./testing/checkout-status.fixture";
+import { statusPageAuthorizationFixture } from "./testing/checkout-status-fixture";
 
 mock.module("server-only", () => ({}));
 

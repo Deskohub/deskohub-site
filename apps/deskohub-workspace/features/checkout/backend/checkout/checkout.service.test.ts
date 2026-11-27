@@ -1147,7 +1147,10 @@ describe("CheckoutService", () => {
       orderId,
       acceptedQuote: quote,
       activeAttempt,
-      reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+      reservationOverrides: {
+        activePaymentAttemptId: activeAttempt.id,
+        paymentState: "pending",
+      },
     });
     expect(await Effect.runPromise(harness.effect)).toMatchObject({
       status: "redirect",
@@ -1814,7 +1817,10 @@ describe("CheckoutService", () => {
       const harness = await createCheckoutHarness({
         orderId,
         activeAttempt,
-        reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+        reservationOverrides: {
+          activePaymentAttemptId: activeAttempt.id,
+          paymentState: "pending",
+        },
       });
 
       const annotations = await captureAnnotations(harness.effect);
@@ -2115,7 +2121,10 @@ describe("CheckoutService", () => {
         sectionKeys: ["order", "total"],
         itemKeys: ["product:cowork:reserved-desk"],
       },
-      reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+      reservationOverrides: {
+        activePaymentAttemptId: activeAttempt.id,
+        paymentState: "pending",
+      },
     });
 
     const result = await Effect.runPromise(harness.effect);
@@ -2154,7 +2163,10 @@ describe("CheckoutService", () => {
       orderId,
       activeAttempt,
       returnTarget: "native-app",
-      reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+      reservationOverrides: {
+        activePaymentAttemptId: activeAttempt.id,
+        paymentState: "pending",
+      },
     });
 
     const result = await Effect.runPromise(harness.effect);
@@ -2186,7 +2198,10 @@ describe("CheckoutService", () => {
         discountQuote: discountedQuote,
       }),
       activeAttempt,
-      reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+      reservationOverrides: {
+        activePaymentAttemptId: activeAttempt.id,
+        paymentState: "pending",
+      },
     });
 
     const result = await Effect.runPromise(harness.effect);
@@ -2321,7 +2336,10 @@ describe("CheckoutService", () => {
       const harness = await createCheckoutHarness({
         orderId,
         activeAttempt,
-        reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+        reservationOverrides: {
+          activePaymentAttemptId: activeAttempt.id,
+          paymentState: "pending",
+        },
       });
 
       const result = await Effect.runPromise(harness.effect);
@@ -2350,6 +2368,7 @@ describe("CheckoutService", () => {
       activeAttempt,
       reservationOverrides: {
         activePaymentAttemptId: paymentAttemptIdSchema.make("active-attempt"),
+        paymentState: activeAttempt?.state === "failed" ? "failed" : "pending",
       },
     });
 
@@ -3123,6 +3142,7 @@ describe("CheckoutService", () => {
         activeAttempt,
         reservationOverrides: {
           activePaymentAttemptId: activeAttempt.id,
+          paymentState: "pending",
         },
       });
 
@@ -3331,6 +3351,7 @@ describe("CheckoutService", () => {
       activeAttempt,
       reservationOverrides: {
         activePaymentAttemptId: activeAttempt.id,
+        paymentState: "pending",
         productTier: null,
         productCoffee: false,
         productMonitorOption: null,

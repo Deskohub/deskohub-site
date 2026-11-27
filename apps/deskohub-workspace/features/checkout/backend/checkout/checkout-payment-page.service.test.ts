@@ -38,7 +38,7 @@ import {
   checkoutDotyposReservationId,
   latePaymentRecoveryFixture,
   paymentAttemptWithPageFixture,
-} from "./testing/checkout-payment.fixture";
+} from "./testing/checkout-payment-fixture";
 
 const instant = (value: string) => Temporal.Instant.from(value);
 
@@ -88,17 +88,18 @@ const makeAttempt = (
     ...overrides,
   });
 
-const lateRecovery = (state: "pending" | "recovered" = "pending") =>
+const recoveredDotyposReservationId =
+  DotyposReservationIdSchema.make("dotypos-recovered");
+const lateRecovery = (state: "pending" | "recovered") =>
   latePaymentRecoveryFixture({
-    paymentAttemptId: paymentAttemptIdSchema.make("attempt-older"),
+    paymentAttemptId: attemptId,
     workspaceReservationId: input.orderId,
     originalDotyposReservationId: checkoutDotyposReservationId,
     verifiedPaidAt: providerOrderCreatedAt,
     ...(state === "recovered"
       ? {
           state,
-          recoveredDotyposReservationId:
-            DotyposReservationIdSchema.make("dotypos-recovered"),
+          recoveredDotyposReservationId,
         }
       : { state }),
   });
@@ -412,7 +413,14 @@ describe("CheckoutPaymentPageService.reopen", () => {
   });
 
   test("closes the page while a late payment of the order is reconciled", async () => {
-    const harness = createHarness({ latePaymentRecovery: lateRecovery() });
+    const harness = createHarness({
+      reservation: makeReservation({ paymentState: "expired" }),
+      attempt: makeAttempt({
+        state: "expired",
+        failureCode: "payment_expired",
+      }),
+      latePaymentRecovery: lateRecovery("pending"),
+    });
 
     expect(await harness.reopen()).toEqual({
       state: "closed",
@@ -421,12 +429,21 @@ describe("CheckoutPaymentPageService.reopen", () => {
     expect(harness.findAttempt).not.toHaveBeenCalled();
   });
 
-  test("ignores a late payment that recovery already confirmed", async () => {
+  test("closes the page of a paid reservation after late payment recovery", async () => {
     const harness = createHarness({
+      reservation: makeReservation({
+        dotyposReservationId: recoveredDotyposReservationId,
+        reservationState: "confirmed",
+        reservationConfirmedAt: providerOrderCreatedAt,
+        paymentState: "paid",
+        paidAt: providerOrderCreatedAt,
+      }),
+      attempt: makeAttempt({ state: "paid" }),
       latePaymentRecovery: lateRecovery("recovered"),
     });
 
-    expect((await harness.reopen()).state).toBe("opened");
+    expect(await harness.reopen()).toEqual({ state: "closed", reason: "paid" });
+    expect(harness.findAttempt).not.toHaveBeenCalled();
   });
 
   test.each(["cancelled", "hold_expired", "confirmed"] as const)(

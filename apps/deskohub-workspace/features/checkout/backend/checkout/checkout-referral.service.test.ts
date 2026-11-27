@@ -52,6 +52,7 @@ import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { calculateReferrerDiscountAmount } from "@/features/referrals/referrer-discount";
 import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
@@ -426,21 +427,25 @@ const makeServiceLayer = (input: {
               input.activePaymentAttemptId)
             : input.activePaymentAttemptId;
         return Effect.succeed(
-          payableReservationFixture({
-            id: state.orderId,
-            locale: state.locale,
-            reservationDetails: getStoredWorkspaceReservationDetails(
-              state.reservation
-            ),
-            dotyposCustomerId:
-              input.payableReservationCustomerId ?? dotyposCustomerId,
-            activePaymentAttemptId: activePaymentAttemptId ?? null,
-            // Admitting an attempt makes the order's payment pending.
-            paymentState:
-              activePaymentAttemptId === undefined ? "not_started" : "pending",
-            reservationHoldExpiresAt:
-              Temporal.Instant.from(storedHoldExpiresAt),
-          })
+          withCoworkProductFields(
+            payableReservationFixture({
+              id: state.orderId,
+              locale: state.locale,
+              reservationDetails: getStoredWorkspaceReservationDetails(
+                state.reservation
+              ),
+              dotyposCustomerId:
+                input.payableReservationCustomerId ?? dotyposCustomerId,
+              activePaymentAttemptId: activePaymentAttemptId ?? null,
+              // Admitting an attempt makes the order's payment pending.
+              paymentState:
+                activePaymentAttemptId === undefined
+                  ? "not_started"
+                  : "pending",
+              reservationHoldExpiresAt:
+                Temporal.Instant.from(storedHoldExpiresAt),
+            })
+          )
         );
       })
     ).pipe(Layer.provide(TestSealedStateKeys))

@@ -15,7 +15,7 @@ import {
 import {
   failedCheckoutStatusRead,
   fulfilledCheckoutStatus,
-} from "./testing/checkout-status.fixture";
+} from "./testing/checkout-status-fixture";
 
 const input = {
   accessCookie: "access-cookie",

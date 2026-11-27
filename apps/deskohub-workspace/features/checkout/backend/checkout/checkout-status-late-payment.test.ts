@@ -44,7 +44,7 @@ import {
   testReservationPaymentWindow,
 } from "./payment-page-provider-status.test-utils";
 
-import { latePaymentRecoveryFixture } from "./testing/checkout-payment.fixture";
+import { latePaymentRecoveryFixture } from "./testing/checkout-payment-fixture";
 
 const testEmailAddressForLate = testEmailAddress("late");
 
@@ -79,12 +79,6 @@ const reservationFixture = workspaceReservationFixture({
   updatedAt: createdAt,
 });
 
-const paidAttempt = {
-  ...pendingNexiAttemptFixture(reservationId, attemptId, createdAt),
-  state: "paid",
-  refundState: "required",
-} satisfies PaymentAttempt;
-
 const openTable = Schema.decodeSync(DotyposTableSchema)({
   _cloudId: "cloud-id",
   display: true,
@@ -103,6 +97,7 @@ const makeHarness = (options: {
   };
   readonly finalizationResult?: "not_pending" | "paid" | "pending";
 }) => {
+  const reservation = { ...reservationFixture, ...options.reservation };
   const recovery = options.recovery;
   const recoveryRow = recovery
     ? latePaymentRecoveryFixture({
@@ -118,6 +113,18 @@ const makeHarness = (options: {
           : { state: recovery.state }),
       })
     : null;
+  const displayableAttempt: PaymentAttempt | null =
+    reservation.paymentState === "paid"
+      ? {
+          ...pendingNexiAttemptFixture(reservationId, attemptId, createdAt),
+          state: "paid",
+          refundState:
+            recoveryRow?.paymentAttemptId === attemptId &&
+            recoveryRow.state === "refund_required"
+              ? "required"
+              : "not_required",
+        }
+      : null;
   const startRecoveryIfSettled = mock(() =>
     Effect.succeed("recovery_started" as const)
   );
@@ -133,16 +140,11 @@ const makeHarness = (options: {
           ),
         }),
         Layer.mock(WorkspaceReservationRepository, {
-          findById: mock(() =>
-            Effect.succeed({
-              ...reservationFixture,
-              ...options.reservation,
-            })
-          ),
+          findById: mock(() => Effect.succeed(reservation)),
         }),
         Layer.mock(PaymentAttemptRepository, {
           findDisplayableForReservation: mock(() =>
-            Effect.succeed(paidAttempt)
+            Effect.succeed(displayableAttempt)
           ),
         }),
         Layer.mock(LatePaymentRecoveryRepository, {
