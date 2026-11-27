@@ -1,14 +1,22 @@
 import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import {
+  CloudinaryDestroyError,
+  CloudinaryPrefixDeleteError,
+  CloudinaryRenameError,
+  CloudinarySearchError,
+  CloudinaryUploadError,
+} from "@deskohub/cloudinary";
 import { buildVersionedDeliveryUrl } from "@deskohub/cloudinary/delivery";
 import {
   type CloudinaryPublicId,
   CloudinaryPublicIdSchema,
 } from "@deskohub/cloudinary/schema";
+import { CloudinaryService } from "@deskohub/cloudinary/server";
 import {
-  Context,
+  type Context,
   Deferred,
   Effect,
   Fiber,
@@ -50,7 +58,7 @@ type CloudinaryCall =
 
 let calls: CloudinaryCall[] = [];
 let renameFailuresRemaining = 0;
-let renameFailureReason = "failed";
+let renameFailureReason: CloudinaryRenameError["reason"] = "failed";
 let renameFailureHttpCode: number | undefined;
 let commitButLoseRenameResponse = false;
 let renameReportsSourceMissingWithoutCommit = false;
@@ -60,10 +68,10 @@ let destroyOutcome: "destroyed" | "not-found" | "uncertain" = "destroyed";
 let uncertainDestroyTargets: readonly string[] = [];
 let renameGateMillis = 0;
 let renameStartedDeferred: Deferred.Deferred<void> | null = null;
-let renameSettledDeferred: Deferred.Deferred<never, void> | null = null;
+let renameSettledDeferred: Deferred.Deferred<void> | null = null;
 let accountLockGate: {
-  readonly entered: Deferred.Deferred<never, void>;
-  readonly release: Deferred.Deferred<never, void>;
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
 } | null = null;
 let storedAssets: Set<string> = new Set();
 /** Immutable provider asset identities keyed by public ID. */
@@ -82,7 +90,7 @@ const makeSession = (account: string): CustomerAccountSession => ({
 });
 
 const makeAsset = (publicId: string, version: number, assetId?: string) => ({
-  public_id: publicId,
+  public_id: CloudinaryPublicIdSchema.make(publicId),
   asset_id: assetId ?? `asset-${publicId}`,
   secure_url: `https://res.cloudinary.test/upload/${publicId}`,
   url: `http://res.cloudinary.test/${publicId}`,
@@ -94,41 +102,18 @@ const makeAsset = (publicId: string, version: number, assetId?: string) => ({
   created_at: "2026-09-01T00:00:00Z",
 });
 
-const Cloudinary = Context.Service<
-  Cloudinary,
-  {
-    readonly getByPublicId: (
-      publicId: CloudinaryPublicId
-    ) => Effect.Effect<unknown, { httpCode?: number }>;
-    readonly listFolderAssets: (
-      folder: string,
-      options?: { readonly maxResults?: number }
-    ) => Effect.Effect<unknown[], { _tag: string }>;
-    readonly uploadImage: (input: {
-      readonly bytes: Uint8Array;
-      readonly publicId: CloudinaryPublicId;
-      readonly folder: string;
-    }) => Effect.Effect<unknown, never>;
-    readonly destroyAsset: (
-      publicId: CloudinaryPublicId
-    ) => Effect.Effect<unknown, { _tag: string }>;
-    readonly deleteResourcesByPublicIdPrefix: (
-      prefix: CloudinaryPublicId
-    ) => Effect.Effect<void, { _tag: string }>;
-    readonly renameAsset: (
-      from: CloudinaryPublicId,
-      to: CloudinaryPublicId,
-      options?: { readonly overwrite?: boolean }
-    ) => Effect.Effect<unknown, { _tag: string }>;
-  }
->()("@test/AvatarCloudinary");
-
-const CloudinaryLayer = Layer.succeed(Cloudinary, {
+const CloudinaryLayer = Layer.mock(CloudinaryService, {
   getByPublicId: (publicId) =>
     Effect.suspend(() => {
       calls.push({ op: "get", publicId });
       if (!storedAssets.has(publicId)) {
-        return Effect.fail({ _tag: "CloudinarySearchError", httpCode: 404 });
+        return Effect.fail(
+          new CloudinarySearchError({
+            message: "asset missing",
+            expression: publicId,
+            httpCode: 404,
+          })
+        );
       }
       return Effect.succeed(
         makeAsset(publicId, 42, assetIdByPublicId.get(publicId))
@@ -160,7 +145,12 @@ const CloudinaryLayer = Layer.succeed(Cloudinary, {
       assetIdByPublicId.set(fullId, lastUploadedAssetId);
       lastUploadedBytes = input.bytes;
       if (uploadStoreThenFail) {
-        return Effect.fail({ _tag: "CloudinaryUploadError" });
+        return Effect.fail(
+          new CloudinaryUploadError({
+            message: "upload response lost",
+            publicId: input.publicId,
+          })
+        );
       }
       return Effect.succeed(
         makeAsset(fullId, 7, assetIdByPublicId.get(fullId))
@@ -170,22 +160,41 @@ const CloudinaryLayer = Layer.succeed(Cloudinary, {
     Effect.suspend(() => {
       calls.push({ op: "destroy", publicId });
       if (uncertainDestroyTargets.includes(publicId)) {
-        return Effect.fail({ _tag: "CloudinaryDestroyError" });
+        return Effect.fail(
+          new CloudinaryDestroyError({
+            message: "destroy outcome unknown",
+            publicId,
+            outcome: "uncertain",
+          })
+        );
       }
       if (destroyOutcome === "uncertain") {
-        return Effect.fail({ _tag: "CloudinaryDestroyError" });
+        return Effect.fail(
+          new CloudinaryDestroyError({
+            message: "destroy outcome unknown",
+            publicId,
+            outcome: "uncertain",
+          })
+        );
       }
       storedAssets.delete(publicId);
       assetIdByPublicId.delete(publicId);
       return Effect.succeed(
-        destroyOutcome === "destroyed" ? "destroyed" : "not-found"
+        destroyOutcome === "destroyed"
+          ? ("destroyed" as const)
+          : ("not-found" as const)
       );
     }),
   deleteResourcesByPublicIdPrefix: (prefix) =>
     Effect.suspend(() => {
       calls.push({ op: "delete-prefix", prefix });
       if (prefixDeleteFails) {
-        return Effect.fail({ _tag: "CloudinaryPrefixDeleteError" });
+        return Effect.fail(
+          new CloudinaryPrefixDeleteError({
+            message: "prefix delete outcome unknown",
+            outcome: "uncertain",
+          })
+        );
       }
       for (const publicId of storedAssets) {
         if (publicId.startsWith(prefix)) {
@@ -221,19 +230,23 @@ const CloudinaryLayer = Layer.succeed(Cloudinary, {
     }),
 });
 
-const renameOutcome = (
-  from: CloudinaryPublicId,
-  to: CloudinaryPublicId
-): Effect.Effect<unknown, { _tag: string }> => {
+const renameOutcome = (from: CloudinaryPublicId, to: CloudinaryPublicId) => {
+  const fail = (reason: CloudinaryRenameError["reason"], httpCode?: number) =>
+    Effect.fail(
+      new CloudinaryRenameError({
+        message: "rename failed",
+        fromPublicId: from,
+        toPublicId: to,
+        reason,
+        httpCode,
+      })
+    );
   if (renameReportsSourceMissingWithoutCommit) {
     // The provider reports the staged source as gone without the rename
     // having committed: the live asset is still the previous avatar.
     storedAssets.delete(from);
     assetIdByPublicId.delete(from);
-    return Effect.fail({
-      _tag: "CloudinaryRenameError",
-      reason: "source-missing",
-    });
+    return fail("source-missing");
   }
   if (commitButLoseRenameResponse) {
     commitButLoseRenameResponse = false;
@@ -246,31 +259,16 @@ const renameOutcome = (
     assetIdByPublicId.delete(from);
     if (assetId !== undefined) assetIdByPublicId.set(to, assetId);
     if (renameFailureHttpCode !== undefined) {
-      return Effect.fail({
-        _tag: "CloudinaryRenameError",
-        reason: renameFailureReason,
-        httpCode: renameFailureHttpCode,
-      });
+      return fail(renameFailureReason, renameFailureHttpCode);
     }
-    return Effect.fail({
-      _tag: "CloudinaryRenameError",
-      reason: "source-missing",
-    });
+    return fail("source-missing");
   }
   if (!storedAssets.has(from)) {
-    return Effect.fail({
-      _tag: "CloudinaryRenameError",
-      reason: "source-missing",
-      httpCode: 404,
-    });
+    return fail("source-missing", 404);
   }
   if (renameFailuresRemaining > 0) {
     renameFailuresRemaining -= 1;
-    return Effect.fail({
-      _tag: "CloudinaryRenameError",
-      reason: renameFailureReason,
-      httpCode: renameFailureHttpCode,
-    });
+    return fail(renameFailureReason, renameFailureHttpCode);
   }
   storedAssets.delete(from);
   storedAssets.add(to);
@@ -279,16 +277,6 @@ const renameOutcome = (
   if (assetId !== undefined) assetIdByPublicId.set(to, assetId);
   return Effect.succeed(makeAsset(to, 99, assetId));
 };
-
-Object.assign(Cloudinary, { Live: CloudinaryLayer });
-
-const cloudinaryServerModule = "@deskohub/cloudinary" + "/server";
-mock.module(cloudinaryServerModule, () => ({
-  CloudinaryService: Cloudinary,
-  makeCloudinaryRuntimeConfigLayer: () => Layer.mergeAll(CloudinaryLayer),
-  buildVersionedDeliveryUrl,
-  CloudinaryPublicIdSchema,
-}));
 
 let linkActivity: "active" | "deletion-requested" = "active";
 let deletionRequestedAt: Date | null = null;
