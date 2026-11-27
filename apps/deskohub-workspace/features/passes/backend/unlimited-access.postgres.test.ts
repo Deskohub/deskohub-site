@@ -455,7 +455,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         return passes.find((pass) => pass.orderId === original.orderId);
       };
       const renewalPath = `/en-US/passes/unlimited?renew=${original.orderId}`;
-      expect(await accountPass()).toMatchObject({ renewalPath });
+      const statusPath = `/en-US/reservation/status/${original.orderId}`;
+      expect(await accountPass()).toMatchObject({ renewalPath, statusPath });
       const reads: string[] = [];
       expect(
         await load(original.orderId, "open-space", buyer, afterCutoff, {

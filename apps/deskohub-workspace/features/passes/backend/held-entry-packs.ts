@@ -17,6 +17,7 @@ import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassStatus } from "../pass";
 import type { EntryPackSize, PassTier } from "../pass-offer";
 import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
+import { canHolderViewPassOrderStatus } from "./pass-order-status-access";
 
 export type HeldEntryPack = {
   readonly id: OrderId;
@@ -25,6 +26,7 @@ export type HeldEntryPack = {
   readonly entriesLeft: number;
   readonly paidAt: Temporal.Instant;
   readonly complimentary?: true;
+  readonly canViewOrderStatus?: true;
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
   readonly status: PassStatus;
@@ -79,11 +81,13 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
   const rows = yield* db
     .select({
       id: passPurchases.id,
+      buyerAccountId: passPurchases.buyerAccountId,
       tier: passPurchases.tier,
       entryCount: passPurchases.entryCount,
       paidAt: orders.paidAt,
       grantedAt: orders.fulfilledAt,
       paymentState: orders.paymentState,
+      fulfillmentState: orders.fulfillmentState,
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
       status: passPurchases.status,
@@ -134,9 +138,11 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
 
   return rows.flatMap(
     ({
+      buyerAccountId,
       paidAt,
       grantedAt,
       paymentState,
+      fulfillmentState,
       entryCount,
       ...pack
     }): HeldEntryPack[] => {
@@ -148,6 +154,16 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
               entryCount,
               paidAt: acquiredAt,
               ...(paymentState === "complimentary" && { complimentary: true }),
+              ...(canHolderViewPassOrderStatus(
+                {
+                  buyerAccountId,
+                  paymentState,
+                  fulfillmentState,
+                  status: pack.status,
+                  giftClaimedAt: pack.giftClaimedAt,
+                },
+                accountId
+              ) && { canViewOrderStatus: true }),
               entriesLeft: Math.max(0, entryCount - pack.claimedDates.length),
             },
           ]

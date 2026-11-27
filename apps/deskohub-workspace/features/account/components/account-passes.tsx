@@ -270,6 +270,7 @@ function AccountEntryPackCard({
     gift,
     lastUsableDay,
     status,
+    statusPath,
     tier,
   } = pack;
 
@@ -336,16 +337,11 @@ function AccountEntryPackCard({
           )}
         </div>
       </div>
-      {bookPath && (
-        <div className="flex justify-end border-t border-slate-200 bg-stone-50 px-4 py-3 sm:px-6">
-          <Button asChild size="sm" wrap>
-            <GuardedLink href={bookPath}>
-              <CalendarPlus aria-hidden="true" className="size-4 shrink-0" />
-              {m.accountPassBookDate({}, { locale })}
-            </GuardedLink>
-          </Button>
-        </div>
-      )}
+      <AccountEntryPackFooter
+        bookPath={bookPath}
+        locale={locale}
+        statusPath={statusPath}
+      />
     </>
   );
 
@@ -360,5 +356,38 @@ function AccountEntryPackCard({
     </FocusedGiftPassCard>
   ) : (
     <article className={cardClassName}>{contents}</article>
+  );
+}
+
+function AccountEntryPackFooter({
+  bookPath,
+  locale,
+  statusPath,
+}: {
+  readonly bookPath?: string;
+  readonly locale: Locale;
+  readonly statusPath?: string;
+}) {
+  if (!statusPath && !bookPath) return null;
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-stone-50 px-4 py-3 sm:px-6">
+      {statusPath && (
+        <GuardedLink
+          className={textLink({ className: "text-sm" })}
+          href={statusPath}
+        >
+          {m.accountPassGiftOrderStatus({}, { locale })}
+        </GuardedLink>
+      )}
+      {bookPath && (
+        <Button asChild className="ms-auto" size="sm" wrap>
+          <GuardedLink href={bookPath}>
+            <CalendarPlus aria-hidden="true" className="size-4 shrink-0" />
+            {m.accountPassBookDate({}, { locale })}
+          </GuardedLink>
+        </Button>
+      )}
+    </div>
   );
 }
