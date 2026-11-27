@@ -7,6 +7,7 @@ import {
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
   DotyposService,
+  DotyposTableIdSchema,
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq, inArray } from "drizzle-orm";
@@ -18,10 +19,13 @@ import {
   openSpaceTableMoveBatches,
   openSpaceTableMoves,
   paymentAttempts,
+  teamTableHoldClaims,
   workspaceReservations,
 } from "@/db/schema";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { getTableReservationQuote } from "@/features/checkout/reservation-quote-table";
+import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-details-table";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   WorkspaceAvailabilityService,
@@ -31,7 +35,10 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import { dotyposHoldFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -41,9 +48,13 @@ import {
   connectWorkspacePostgresTestDatabase,
   type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
-import { rebuildAcceptedReservation } from "../reservation/order-dotypos-reservation";
+import {
+  type RecreatedReservation,
+  rebuildAcceptedReservation,
+} from "../reservation/order-dotypos-reservation";
 import {
   getWorkspaceReservationInterval,
   WorkspaceTableAssignmentService,
@@ -156,6 +167,8 @@ describe.skipIf(!postgresDatabase)(
         readonly coworkPassesEnabled?: boolean;
         /** Runs when the retry creates the new Dotypos reservation. */
         readonly onCreate?: () => Promise<void>;
+        readonly teamTable?: RecreatedReservation;
+        readonly create?: DotyposService["Service"]["createReservation"];
       } = {}
     ) => {
       const spies = {
@@ -166,11 +179,15 @@ describe.skipIf(!postgresDatabase)(
         listActiveReservationsOverlapping: mock(() =>
           Effect.succeed((options.overlapping ?? []) as never)
         ),
-        createReservation: mock((_input: { readonly status: string }) =>
-          Effect.promise(async () => {
-            await options.onCreate?.();
-            return { id: createdDotyposId } as never;
-          })
+        createReservation: mock(
+          (
+            input: Parameters<DotyposService["Service"]["createReservation"]>[0]
+          ) =>
+            options.create?.(input) ??
+            Effect.promise(async () => {
+              await options.onCreate?.();
+              return { id: createdDotyposId } as never;
+            })
         ),
         ensureAvailable: mock(() =>
           options.unavailable
@@ -206,8 +223,19 @@ describe.skipIf(!postgresDatabase)(
               Layer.provide(Layer.mergeAll(reservations, dotypos))
             ),
             dotypos,
+            TeamTableHoldClaims.Default.pipe(
+              Layer.provide(Layer.merge(postgres.layer, dotypos))
+            ),
+            Layer.mock(OpenSpaceTableMoves, {
+              repackInCapacitySection: () => Effect.succeed(true),
+            }),
             Layer.mock(WorkspaceAvailabilityService, {
               ensureAvailable: spies.ensureAvailable as never,
+              getLiveTeamTablePlan: () =>
+                Effect.succeed({
+                  tableId: DotyposTableIdSchema.make("team-table"),
+                  moves: [],
+                }),
             }),
             Layer.mock(WorkspaceTableAssignmentService, {
               assignTableId: (() => Effect.succeed("table-id")) as never,
@@ -228,7 +256,7 @@ describe.skipIf(!postgresDatabase)(
             service.secure({
               orderId: order.orderId,
               retriedAttemptId: order.attemptId,
-              recreated,
+              recreated: options.teamTable ?? recreated,
             })
           ),
           Effect.provide(layer)
@@ -367,6 +395,73 @@ describe.skipIf(!postgresDatabase)(
         )
       ).toBe(1);
       expect(harness.spies.enqueueCleanup).toHaveBeenCalledTimes(1);
+    });
+
+    test("stages a Team Table retry before posting and attaches the exact full-table hold", async () => {
+      const order = await retriedOrder({
+        reservation: "cancelled",
+        overrides: {
+          reservationDetails: { kind: "table", seats: 4, durationMinutes: 15 },
+          cancellationCause: "hold_expired",
+        },
+      });
+      const reservation = {
+        kind: "table",
+        seats: 4,
+        startsAt: instantStringSchema.make("2030-01-03T09:00:00Z"),
+        endsAt: instantStringSchema.make("2030-01-03T09:15:00Z"),
+      } as const;
+      const quote = await Effect.runPromise(
+        getTableReservationQuote(reservation)
+      );
+      const harness = makeHarness({
+        teamTable: {
+          reservation,
+          checkoutDetails: getTableCheckoutDetails({
+            locale: "en-US",
+            reservation,
+            quote,
+            legalEvidence: {},
+          }),
+        },
+        create: (input) =>
+          Effect.gen(function* () {
+            const [staged] = yield* postgres.db
+              .select()
+              .from(teamTableHoldClaims)
+              .where(eq(teamTableHoldClaims.reservationId, order.orderId));
+            expect(staged).toMatchObject({
+              purpose: "payment_retry",
+              paymentAttemptId: order.attemptId,
+              providerReservationIds: null,
+              seats: 4,
+            });
+            expect(input).toMatchObject({
+              tableId: "team-table",
+              status: "NEW",
+              seats: 4,
+              singleAttempt: true,
+            });
+            expect(input.note).toContain(
+              `Team Table hold: ${staged?.generation}`
+            );
+            return {
+              ...dotyposHoldFixture(createdDotyposId),
+              _tableId: input.tableId,
+              _customerId: input.customerId,
+              startDate: input.startDate.toISOString(),
+              endDate: input.endDate.toISOString(),
+              status: input.status,
+              note: input.note,
+              seats: String(input.seats),
+            };
+          }),
+      });
+      expect(await harness.secure(order)).toMatchObject({
+        kind: "reacquired",
+        reservation: { dotyposReservationId: createdDotyposId },
+      });
+      expect(harness.spies.createReservation).toHaveBeenCalledTimes(1);
     });
 
     test("books again a hold that hold cleanup already released", async () => {

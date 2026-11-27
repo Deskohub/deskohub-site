@@ -50,13 +50,17 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
               )
             )
           ),
-          isNotNull(teamTableHoldClaims.cancelRequestedAt),
+          and(
+            isNull(teamTableHoldClaims.retiredAt),
+            isNotNull(teamTableHoldClaims.cancelRequestedAt)
+          ),
           and(
             inArray(teamTableHoldClaims.purpose, [
               "payment_retry",
               "late_payment",
             ]),
             isNull(teamTableHoldClaims.attachedAt),
+            isNull(teamTableHoldClaims.retiredAt),
             lte(teamTableHoldClaims.endsAt, now)
           )
         )
@@ -127,7 +131,7 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
         if (fresh.purpose === "checkout") {
           yield* claims.finishCheckout(fresh, now, cancelledId);
         } else {
-          yield* claims.clear(fresh);
+          yield* claims.retire(fresh, now);
         }
       });
       yield* WorkspaceLockSections.reservationCapacity(

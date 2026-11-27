@@ -47,6 +47,7 @@ export const loadTeamTableHoldCapacity = Effect.fnUntraced(function* (
         lt(teamTableHoldClaims.startsAt, endsAt),
         gt(teamTableHoldClaims.endsAt, startsAt),
         gt(teamTableHoldClaims.endsAt, now),
+        isNull(teamTableHoldClaims.retiredAt),
         or(
           and(
             inArray(teamTableHoldClaims.purpose, [

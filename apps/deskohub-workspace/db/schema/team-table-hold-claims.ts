@@ -37,6 +37,7 @@ export const teamTableHoldClaims = pgTable(
     paymentAttemptId: text("payment_attempt_id").$type<PaymentAttemptId>(),
     attachedAt: instant("attached_at"),
     cancelRequestedAt: instant("cancel_requested_at"),
+    retiredAt: instant("retired_at"),
   },
   (claim) => [
     check(

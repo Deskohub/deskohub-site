@@ -202,6 +202,17 @@ export const WorkspaceLockSections = {
    */
   reservationOrder: (orderId: WorkspaceReservationId) =>
     holdSection(reservationOrderSection(orderId)),
+  reservationOrders: (
+    target: WorkspaceReservationId,
+    sources: readonly WorkspaceReservationId[]
+  ) => {
+    const others = [...new Set(sources)].filter((id) => id !== target);
+    const first = reservationOrderSection(target);
+    const ordered = [...others.map(reservationOrderSection), first].sort(
+      (left, right) => Order.String(left.pair[1], right.pair[1])
+    );
+    return holdSections([ordered[0] ?? first, ...ordered.slice(1)]);
+  },
   unlimitedPassRecovery: (orderId: OrderId) =>
     holdSection({
       name: "unlimitedPassRecovery",

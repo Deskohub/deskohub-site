@@ -19,7 +19,8 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { TableReservationDetails } from "@/features/reservation/table-reservation";
 import { temporalInstantToDate } from "@/shared/utils/temporal";
 
-type HoldClaim = typeof teamTableHoldClaims.$inferSelect;
+export type TeamTableHoldClaim = typeof teamTableHoldClaims.$inferSelect;
+type HoldClaim = TeamTableHoldClaim;
 type ClaimKey = Pick<HoldClaim, "reservationId" | "generation">;
 export type TeamTableClaimOwner =
   | { readonly purpose: "checkout" }
@@ -122,6 +123,15 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
   const clear = (claim: ClaimKey) =>
     db.delete(teamTableHoldClaims).where(claimKey(claim));
 
+  const retire = (claim: ClaimKey, now: Temporal.Instant) =>
+    db
+      .update(teamTableHoldClaims)
+      .set({
+        retiredAt: now,
+        cancelRequestedAt: null,
+      })
+      .where(claimKey(claim));
+
   const attached = (
     claim: ClaimKey,
     providerId: DotyposReservationId,
@@ -212,6 +222,20 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
       .set({ cancelRequestedAt: now })
       .where(claimKey(claim));
 
+  const compensateReplacement = Effect.fn(
+    "TeamTableHoldClaims.compensateReplacement"
+  )(function* (
+    claim: HoldClaim,
+    customerId: DotyposCustomerId,
+    record: DotyposReservation,
+    now: Temporal.Instant
+  ) {
+    yield* requestCancellation(claim, now);
+    if (!(yield* cancel(claim, customerId, record))) return false;
+    yield* retire(claim, now);
+    return true;
+  });
+
   const expireCheckout = (
     id: WorkspaceReservationId,
     now: Temporal.Instant,
@@ -283,6 +307,8 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
             ("paymentAttemptId" in input.owner
               ? input.owner.paymentAttemptId
               : null);
+        if (ownerMatches && existing.retiredAt)
+          return { kind: "released", claim: existing } as const;
         if (ownerMatches && !existing.cancelRequestedAt) {
           const receipt = yield* inspect(existing, input.customerId);
           if (receipt.kind === "active" && receipt.record.status === status) {
@@ -294,19 +320,23 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
               resumed: true,
             } as const;
           }
-          if (receipt.kind === "absent" || receipt.kind === "cancelled")
+          if (receipt.kind === "absent" || receipt.kind === "cancelled") {
+            if (existing.purpose !== "checkout")
+              yield* retire(existing, Temporal.Now.instant());
             return { kind: "released", claim: existing } as const;
+          }
           return { kind: "pending" } as const;
         }
         // A replacement starts only after the caller confirmed retirement of
         // the last attached provider reservation under the same order lock.
         if (
-          !input.releasedReservationId ||
-          existing.cancelRequestedAt ||
-          !(existing.attachedAt || !existing.generation) ||
-          !existing.providerReservationIds?.includes(
-            input.releasedReservationId
-          )
+          !existing.retiredAt &&
+          (!input.releasedReservationId ||
+            existing.cancelRequestedAt ||
+            !(existing.attachedAt || !existing.generation) ||
+            !existing.providerReservationIds?.includes(
+              input.releasedReservationId
+            ))
         )
           return { kind: "pending" } as const;
         yield* clear(existing);
@@ -372,9 +402,11 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
     remember,
     attached,
     clear,
+    retire,
     inspect,
     cancel,
     requestCancellation,
+    compensateReplacement,
     expireCheckout,
     finishCheckout,
     create,

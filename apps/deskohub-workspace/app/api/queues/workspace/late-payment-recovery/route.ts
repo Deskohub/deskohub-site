@@ -13,6 +13,8 @@ import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repos
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { TeamTableBookingCapacityLive } from "@/features/team-table/backend/team-table-booking-capacity";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { defineQueueRoute } from "@/shared/backend/queue/queue-route";
 
@@ -27,6 +29,14 @@ const databaseRepositories = Layer.mergeAll(
 );
 
 const ConsumerLive = LatePaymentRecoveryService.Default.pipe(
+  Layer.provide(TeamTableBookingCapacityLive),
+  Layer.provide(
+    TeamTableHoldClaims.Default.pipe(
+      Layer.provide(
+        Layer.merge(WorkspaceDatabase.Default, WorkspaceDotyposLayer)
+      )
+    )
+  ),
   Layer.provide(UnpaidHoldRelease.Default),
   Layer.provide(databaseRepositories),
   Layer.provide(WorkspaceAvailabilityService.Live),
