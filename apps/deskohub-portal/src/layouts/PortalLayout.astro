@@ -4,10 +4,11 @@ import "../styles/global.css";
 import type { PortalMetadata } from "../lib/portal";
 
 type Props = {
+  barClosed: boolean;
   metadata: PortalMetadata;
 };
 
-const { metadata } = Astro.props;
+const { barClosed, metadata } = Astro.props;
 ---
 
 <!doctype html>
@@ -30,7 +31,7 @@ const { metadata } = Astro.props;
       href={metadata.alternateDefaultUrl}
     />
   </head>
-  <body class="portal-shell">
+  <body class:list={["portal-shell", { "portal-shell-bar-closed": barClosed }]}>
     <slot />
   </body>
 </html>
