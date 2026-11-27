@@ -504,6 +504,7 @@
   "passes_today": "Today",
   "passes_unclaimed": "Not claimed yet",
   "passes_unlimited": "Unlimited membership",
+  "passes_membership": "Membership",
   "passes_unlimited_price": "From {price} / {days} days",
   "passes_offers_heading": "Packs and memberships",
   "passes_offer_entry_pack_tagline": "pay less per visit",

@@ -214,7 +214,7 @@ function PassPurchaseLinks({
         {unlimited !== undefined && (
           <ListRow
             icon={CalendarRange}
-            label={m.passes_unlimited({}, { locale })}
+            label={m.passes_membership({}, { locale })}
             description={m.passes_unlimited_price(
               {
                 price: formatMoney(unlimited.price, locale),

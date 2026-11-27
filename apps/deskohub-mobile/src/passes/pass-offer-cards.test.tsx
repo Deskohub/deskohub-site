@@ -95,7 +95,7 @@ test("the offers open with a dotted rule and a heading only screen readers read"
     "Packs and memberships"
   );
   const labels = findAll(tree, "Text").map(textOf);
-  expect(labels).toContain("Unlimited membership");
+  expect(labels).toContain("Membership");
   expect(labels).toContain("Open Space access for 30 days");
   expect(labels).toContain("Choose membership");
   expect(links(tree)).toHaveLength(2);

@@ -20,8 +20,11 @@ const nextCache = await import("next/cache");
 mock.module("next/cache", () => ({ ...nextCache, cacheLife: () => {} }));
 
 let coworkPassesRelease: GlobalRelease = "off";
+const loadGlobalRelease = mock((_flag: string) =>
+  Promise.resolve(coworkPassesRelease)
+);
 mock.module("@/features/feature-flags/backend/global-release.server", () => ({
-  loadGlobalRelease: () => Promise.resolve(coworkPassesRelease),
+  loadGlobalRelease,
 }));
 
 // The FAQ's occupancy loader has its own tests; keep this one off Dotypos.
@@ -76,6 +79,7 @@ const { GET } = await import("./route");
 beforeEach(() => {
   publishedPages = publicPages;
   coworkPassesRelease = "off";
+  loadGlobalRelease.mockClear();
 });
 
 const getMarkdown = (locale: string, segments?: ReadonlyArray<string>) =>
@@ -133,6 +137,7 @@ describe("public page Markdown route", () => {
       const markdown = await response.text();
 
       expect(response.status).toBe(200);
+      expect(loadGlobalRelease).toHaveBeenCalledWith("cowork_passes");
       expect(markdown.includes(m.passUnlimited({}, { locale }))).toBe(
         release === "on"
       );
