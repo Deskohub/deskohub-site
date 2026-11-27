@@ -5,7 +5,6 @@ import type {
 } from "@deskohub/workspace-admin-api";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
-import type { WorkspaceReservationKind } from "@/features/reservation/reservation-kind";
 import { reservationProductFamilies } from "@/features/reservation/reservation-product-descriptor";
 import {
   registerWorkspaceComponentTestEnv,
@@ -31,6 +30,7 @@ afterAll(unregisterWorkspaceComponentTestEnv);
 const locale = "en-US";
 
 type Filter = ReservationProductFilterType | undefined;
+type CampaignReservationFamily = ReservationProductFilterType["family"];
 
 const renderControl = (
   value: Filter,
@@ -52,12 +52,11 @@ type View = ReturnType<typeof renderControl>;
 const changes = () => mock((_value: Filter) => undefined);
 
 const filterOf = (
-  family: WorkspaceReservationKind,
+  family: CampaignReservationFamily,
   ...properties: ReservationProductPropertyCondition[]
-): ReservationProductFilterType =>
-  ({ family, properties }) as ReservationProductFilterType;
+): ReservationProductFilterType => ({ family, properties });
 
-const label = (family: WorkspaceReservationKind, property: string) =>
+const label = (family: CampaignReservationFamily, property: string) =>
   reservationProductPropertyLabel(family, property, locale);
 
 const tiers = reservationProductFamilies.cowork.properties[0].values;
@@ -100,16 +99,16 @@ describe("product family", () => {
     expect(addConditionButton(view)).toBeNull();
   });
 
-  test("lists any product and then every family", async () => {
+  test("lists only the families supported by campaign filters", async () => {
     const view = renderControl(undefined);
     await openMenu(productSelect(view));
     expect(
       view.getAllByRole("option").map((option) => option.textContent)
     ).toEqual([
       m.emailCampaignsAudienceProductAny({}, { locale }),
-      ...Object.values(reservationProductFamilies).map(({ id }) =>
-        reservationProductFamilyLabel(id, locale)
-      ),
+      reservationProductFamilyLabel("cowork", locale),
+      reservationProductFamilyLabel("meeting-room", locale),
+      reservationProductFamilyLabel("office", locale),
     ]);
   });
 
