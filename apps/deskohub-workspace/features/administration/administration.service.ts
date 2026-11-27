@@ -3097,7 +3097,9 @@ export class AdministrationService extends Context.Service<
           marketingConsentRows[0]
         );
 
-        if (recentRows.length === 0) {
+        // A family filter can hide every reservation while payments and totals
+        // still belong in the customer's activity.
+        if (recentRows.length === 0 && options?.excludedType === undefined) {
           return {
             reservations: [],
             reservationHistoryTruncated: false,

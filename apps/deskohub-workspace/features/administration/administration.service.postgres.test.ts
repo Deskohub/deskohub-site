@@ -414,58 +414,77 @@ describe.skipIf(!testDatabase)(
       });
     });
 
-    test("counts only the amount kept after refunds as customer revenue", async () => {
-      const customerId = makeCustomerId("revenue");
-      const payments = [
-        { label: "refunded", amountValue: 39_000, refundedAmountValue: 39_000 },
-        { label: "partial", amountValue: 45_000, refundedAmountValue: 15_000 },
-        { label: "kept", amountValue: 35_000, refundedAmountValue: null },
-      ] as const;
-      for (const { label, amountValue, refundedAmountValue } of payments) {
-        const reservationId = await insertReservation({
-          customerId,
-          label: `revenue-${label}`,
-          reservationState: "confirmed",
-          fulfillmentState: "fulfilled",
-        });
-        const id = `revenue-${label}-${runId}`;
-        await Effect.runPromise(
-          testDatabase.db.insert(paymentAttempts).values({
-            id: paymentAttemptIdSchema.make(`attempt-${id}`),
-            workspaceReservationId: reservationId,
-            provider: "nexi",
-            providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
-            state: "paid",
-            amountValue,
-            amountExponent: 2,
-            currency: "CZK",
-            ...(refundedAmountValue === null
-              ? { refundState: "not_required" }
-              : {
-                  refundState: "refunded",
-                  refundedAmountValue,
-                  refundedAt: Temporal.Instant.from("2026-10-11T12:00:00Z"),
-                }),
+    test.each(["cowork", "table"] as const)(
+      "counts only the amount kept after refunds for a %s customer",
+      async (kind) => {
+        const customerId = makeCustomerId(`revenue-${kind}`);
+        const details =
+          kind === "table"
+            ? { kind, seats: 4, durationMinutes: 60 }
+            : openSpaceDetails;
+        const product =
+          kind === "table" ? { kind } : { kind, tier: "open-space" };
+        const payments = [
+          {
+            label: "refunded",
+            amountValue: 39_000,
+            refundedAmountValue: 39_000,
+          },
+          {
+            label: "partial",
+            amountValue: 45_000,
+            refundedAmountValue: 15_000,
+          },
+          { label: "kept", amountValue: 35_000, refundedAmountValue: null },
+        ] as const;
+        for (const { label, amountValue, refundedAmountValue } of payments) {
+          const reservationId = await insertReservation({
+            customerId,
+            details,
+            label: `revenue-${kind}-${label}`,
+            reservationState: "confirmed",
+            fulfillmentState: "fulfilled",
+          });
+          const id = `revenue-${kind}-${label}-${runId}`;
+          await Effect.runPromise(
+            testDatabase.db.insert(paymentAttempts).values({
+              id: paymentAttemptIdSchema.make(`attempt-${id}`),
+              workspaceReservationId: reservationId,
+              provider: "nexi",
+              providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
+              state: "paid",
+              amountValue,
+              amountExponent: 2,
+              currency: "CZK",
+              ...(refundedAmountValue === null
+                ? { refundState: "not_required" }
+                : {
+                    refundState: "refunded",
+                    refundedAmountValue,
+                    refundedAt: Temporal.Instant.from("2026-10-11T12:00:00Z"),
+                  }),
+            })
+          );
+        }
+
+        const activity = await run((administration) =>
+          administration.loadCustomerActivity(customerId, {
+            excludedType: kind === "table" ? "table" : undefined,
           })
         );
+
+        expect(activity.reservations).toHaveLength(kind === "table" ? 0 : 3);
+        expect(activity.stats.reservationCount).toBe(3);
+        expect(activity.stats.revenue).toEqual([
+          { value: 65_000, exponent: 2, currency: "CZK" },
+        ]);
+        // The Admin UI names products from these codes in the operator's language.
+        expect(activity.stats.favoriteReservationProduct).toEqual(product);
+        expect(
+          activity.transactions.map(({ reservation }) => reservation.product)
+        ).toEqual(payments.map(() => product));
       }
-
-      const activity = await run((administration) =>
-        administration.loadCustomerActivity(customerId)
-      );
-
-      expect(activity.stats.revenue).toEqual([
-        { value: 65_000, exponent: 2, currency: "CZK" },
-      ]);
-      // The Admin UI names products from these codes in the operator's language.
-      expect(activity.stats.favoriteReservationProduct).toEqual({
-        kind: "cowork",
-        tier: "open-space",
-      });
-      expect(
-        activity.transactions.map(({ reservation }) => reservation.product)
-      ).toEqual(payments.map(() => ({ kind: "cowork", tier: "open-space" })));
-    });
+    );
 
     describe("customer list filters", () => {
       const range = { from: "2026-10-01", to: "2026-10-31" } as const;
