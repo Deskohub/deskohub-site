@@ -75,7 +75,7 @@ export const publicPageDefinitions: Readonly<
   "/coworking": {
     title: m.coworkingMetadataTitle,
     description: m.coworkingMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/contact": {
     title: m.contactMetadataTitle,
@@ -85,7 +85,7 @@ export const publicPageDefinitions: Readonly<
   "/faq": {
     title: m.faqMetadataTitle,
     description: m.faqMetadataDescription,
-    contentDate: "2026-11-18",
+    contentDate: "2026-11-27",
   },
   "/ai-assistants": {
     title: m.aiAssistantsMetadataTitle,
@@ -134,7 +134,7 @@ export const publicPageDefinitions: Readonly<
   "/reservation/cowork": {
     title: m.reservationCoworkMetadataTitle,
     description: m.reservationCoworkMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/reservation/meeting-room": {
     title: m.reservationMeetingRoomMetadataTitle,

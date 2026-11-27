@@ -1871,7 +1871,7 @@
   "tableInviteeCancellationSubject": "{booker} की टीम टेबल बुकिंग रद्द हो गई है",
   "tableInviteeRestorationSubject": "{booker} की टीम टेबल बुकिंग फिर से मान्य है",
   "tableInviteeRestorationHeading": "{booker} की टीम टेबल बुकिंग बहाल हो गई है",
-  "reservationAssignedTableLabel": "Reserved table",
+  "reservationAssignedTableLabel": "बुक की गई टेबल",
   "officeInvitationDateLabel": "तारीख़",
   "officeInvitationBookedByLabel": "बुक करने वाले",
   "officeInvitationReason": "आपको यह ईमेल इसलिए मिला है क्योंकि {booker} ने अपनी बुकिंग में आपका पता जोड़ा है। कोई सवाल? इस ईमेल का जवाब दें या {email} पर लिखें।",

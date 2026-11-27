@@ -1871,7 +1871,7 @@
   "tableInviteeCancellationSubject": "Die Teamtischbuchung von {booker} wurde storniert",
   "tableInviteeRestorationSubject": "Die Teamtischbuchung von {booker} ist wieder gültig",
   "tableInviteeRestorationHeading": "Die Teamtischbuchung von {booker} wurde wiederhergestellt",
-  "reservationAssignedTableLabel": "Reserved table",
+  "reservationAssignedTableLabel": "Reservierter Tisch",
   "officeInvitationDateLabel": "Datum",
   "officeInvitationBookedByLabel": "Gebucht von",
   "officeInvitationReason": "Du bekommst diese E-Mail, weil {booker} deine Adresse zur Reservierung hinzugefügt hat. Fragen? Antworte einfach oder schreib an {email}.",

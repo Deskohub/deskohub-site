@@ -68,9 +68,10 @@ let sharedPriceList: PriceListLoad;
 let variesByVisitor = false;
 let visitorPriceList: PriceListLoad;
 let teamTablePrices: ReadonlyArray<TeamTablePrice> = [];
+let visitorTeamTablePrices: ReadonlyArray<TeamTablePrice> = [];
 const loadVisitorPriceList = mock(async (locale: Locale) => ({
   offerings: await visitorPriceList(locale),
-  teamTablePrices: [],
+  teamTablePrices: visitorTeamTablePrices,
 }));
 mock.module("@/features/pricing/backend/price-list.server", () => ({
   loadSharedPriceList: async (locale: Locale) => ({
@@ -142,6 +143,7 @@ beforeEach(() => {
   variesByVisitor = false;
   visitorPriceList = saleOnOpenSpace;
   teamTablePrices = [];
+  visitorTeamTablePrices = [];
   loadVisitorPriceList.mockClear();
 });
 
@@ -185,6 +187,45 @@ describe("PricingPage", () => {
 
     expect(visibleText(html)).not.toContain("Team Table");
     expect(html).not.toContain("/reservation/table");
+  });
+
+  test("publishes the same Team Table rate and sale in visitor HTML and structured data during rollout", async () => {
+    variesByVisitor = true;
+    visitorTeamTablePrices = [
+      {
+        seats: 4,
+        base: currencyCZK(24_000),
+        hourly: currencyCZK(8_000),
+        advertisedPrice: {
+          price: currencyCZK(25_600),
+          discount: currencyCZK(6_400),
+        },
+      },
+    ];
+    const html = await renderPage("en-US");
+    const document = new DOMParser().parseFromString(html, "text/html");
+    const services = Array.from(
+      document.querySelectorAll('script[type="application/ld+json"]'),
+      (script) => JSON.parse(script.textContent ?? "null")
+    ).filter((data) => data.name === "Team Table");
+
+    const text = (document.body.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain("Table for 4 · CZK 240 to reserve + CZK 80/hour");
+    expect(text).toContain("CZK 256 (regular price CZK 320)");
+    expect(services).toMatchObject([
+      {
+        offers: [
+          {
+            price: 256,
+            priceSpecification: [
+              { price: 240 },
+              { price: 80, unitCode: "HUR" },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(services).toHaveLength(1);
   });
 
   test("keeps cowork pass offers out of the price page while the release is off", async () => {

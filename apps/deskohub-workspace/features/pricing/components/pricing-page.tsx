@@ -23,7 +23,6 @@ import {
 import { getOfferingSale } from "../offering-sale";
 import { getPriceFamilies } from "../price-family";
 import { EntryPackPrices } from "./entry-pack-prices";
-import { TeamTableOffersStructuredData } from "./team-table-offers-structured-data";
 import { TeamTablePrices } from "./team-table-prices";
 import { UnlimitedPassPrices } from "./unlimited-pass-prices";
 
@@ -107,7 +106,6 @@ async function PriceLists({ locale }: PricingPageProps) {
   return (
     <>
       <PublicOfferingsStructuredData locale={locale} offerings={offerings} />
-      <TeamTableOffersStructuredData locale={locale} prices={teamTablePrices} />
       {variesByVisitor ? (
         <Suspense fallback={shared}>
           <VisitorPriceList locale={locale} />

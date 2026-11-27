@@ -6,6 +6,7 @@ import {
   getTeamTablePriceCopy,
   type TeamTablePrice,
 } from "../team-table-price";
+import { TeamTableOffersStructuredData } from "./team-table-offers-structured-data";
 
 export function TeamTablePrices({
   locale,
@@ -41,6 +42,7 @@ export function TeamTablePrices({
           {m.landingOfferingTeamTableBookingLink({}, { locale })}
         </Link>
       </Button>
+      <TeamTableOffersStructuredData locale={locale} prices={prices} />
     </section>
   );
 }

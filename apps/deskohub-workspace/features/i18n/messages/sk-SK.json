@@ -1911,7 +1911,7 @@
   "tableInviteeCancellationSubject": "Rezervácia tímového stola od {booker} bola zrušená",
   "tableInviteeRestorationSubject": "Rezervácia tímového stola od {booker} znova platí",
   "tableInviteeRestorationHeading": "Rezervácia tímového stola od {booker} bola obnovená",
-  "reservationAssignedTableLabel": "Reserved table",
+  "reservationAssignedTableLabel": "Rezervovaný stôl",
   "officeInvitationDateLabel": "Dátum",
   "officeInvitationBookedByLabel": "Rezervácia od",
   "officeInvitationReason": "Tento e-mail ti prišiel, pretože tvoja adresa je uvedená v rezervácii od {booker}. Máš otázku? Odpovedz na tento e-mail alebo napíš na {email}.",

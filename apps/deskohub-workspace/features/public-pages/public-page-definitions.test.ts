@@ -50,6 +50,18 @@ const longDate = (isoDate: string, locale: Locale) =>
   }).format(new Date(`${isoDate}T12:00:00Z`));
 
 describe("public page content dates", () => {
+  test("dates the Open Space seating policy update on each page that presents it", () => {
+    for (const path of ["/coworking", "/faq", "/reservation/cowork"] as const) {
+      for (const locale of locales) {
+        const date = getPublicPageContentDate(
+          publicPageDefinitions[path],
+          locale
+        );
+        expect(date >= "2026-11-27").toBe(true);
+      }
+    }
+  });
+
   test("date every page with a calendar day that has passed", () => {
     const today = Temporal.Now.plainDateISO("Europe/Prague");
 

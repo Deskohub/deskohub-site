@@ -1911,7 +1911,7 @@
   "tableInviteeCancellationSubject": "Бронювання командного стола від {booker} скасовано",
   "tableInviteeRestorationSubject": "Бронювання командного стола від {booker} знову дійсне",
   "tableInviteeRestorationHeading": "Бронювання командного стола від {booker} відновлено",
-  "reservationAssignedTableLabel": "Reserved table",
+  "reservationAssignedTableLabel": "Заброньований стіл",
   "officeInvitationDateLabel": "Дата",
   "officeInvitationBookedByLabel": "Хто забронював",
   "officeInvitationReason": "Ви отримали цей лист, бо вашу адресу додано до бронювання від {booker}. Є запитання? Відповідайте на цей лист або напишіть на {email}.",

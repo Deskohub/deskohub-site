@@ -1851,7 +1851,7 @@
   "tableInviteeCancellationSubject": "Đặt bàn nhóm của {booker} đã bị huỷ",
   "tableInviteeRestorationSubject": "Đặt bàn nhóm của {booker} có hiệu lực trở lại",
   "tableInviteeRestorationHeading": "Đặt bàn nhóm của {booker} đã được khôi phục",
-  "reservationAssignedTableLabel": "Reserved table",
+  "reservationAssignedTableLabel": "Bàn đã đặt",
   "officeInvitationDateLabel": "Ngày",
   "officeInvitationBookedByLabel": "Người đặt",
   "officeInvitationReason": "Bạn nhận được email này vì {booker} đã thêm địa chỉ của bạn vào đặt chỗ của họ. Có câu hỏi? Hãy trả lời email này hoặc viết cho chúng tôi tại {email}.",
