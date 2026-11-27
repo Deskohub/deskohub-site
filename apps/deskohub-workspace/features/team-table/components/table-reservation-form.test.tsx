@@ -7,6 +7,7 @@ import { buildTableReservationQuote } from "@/features/checkout/reservation-quot
 import { m } from "@/features/i18n";
 import { mockCheckoutEmailVerification } from "@/features/reservation/components/use-checkout-email-verification.test-utils";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import type { TableBookingSelection } from "@/features/team-table/table-booking-selection";
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
@@ -73,6 +74,62 @@ afterEach(() => {
 });
 afterAll(unregisterWorkspaceComponentTestEnv);
 
+const availableCalendar = () =>
+  Response.json({
+    from: today.toString(),
+    to: today.add({ months: 6 }).toString(),
+    unavailableDates: [],
+    reservedDeskWorkstationRequiredDates: [],
+    unavailableCoworkTiers: [],
+    meetingRoomUnavailable: false,
+    officeUnavailable: false,
+    unavailableMonitorOptions: [],
+    notices: [],
+  });
+
+const availableSlots = (
+  seats: number,
+  entries: readonly {
+    readonly startTime: string;
+    readonly endTimes: readonly string[];
+  }[]
+) =>
+  Response.json({
+    date,
+    seats,
+    slotMinutes: 15,
+    usableFrom: "00:00",
+    usableUntil: "17:00",
+    availableStarts: entries.map(({ startTime }) => startTime),
+    availableEndsByStart: entries,
+  });
+
+const renderForm = (
+  selection: TableBookingSelection,
+  priorDateUnavailable = false
+) =>
+  render(
+    <QueryClientProvider client={queries}>
+      <TableReservationForm
+        capacities={[4, 6]}
+        checkoutCustomer={{ status: "signed-out" }}
+        initialValues={{
+          ...selection,
+          people: { contactAttends: true, invitees: [] },
+          name: "",
+          email: "",
+          phone: "",
+          marketingConsent: false,
+        }}
+        initialAdvertisedPrices={[]}
+        initialAvailability={[]}
+        locale={locale}
+        priorDateUnavailable={priorDateUnavailable}
+        today={today.toString()}
+      />
+    </QueryClientProvider>
+  );
+
 test("offers live starts and only the ends for the selected start, and reprices a changed span", async () => {
   let failSlots = false;
   globalThis.fetch = stubFetch(async (input) => {
@@ -88,53 +145,12 @@ test("offers live starts and only the ends for the selected start, and reprices 
               { startTime: "09:15", endTimes: ["09:30", "09:45"] },
             ]
           : [{ startTime: "11:00", endTimes: ["11:15"] }];
-      return Response.json({
-        date,
-        seats,
-        slotMinutes: 15,
-        usableFrom: "00:00",
-        usableUntil: "17:00",
-        availableStarts: entries.map(({ startTime }) => startTime),
-        availableEndsByStart: entries,
-      });
+      return availableSlots(seats, entries);
     }
-    return Response.json({
-      from: today.toString(),
-      to: today.add({ months: 6 }).toString(),
-      unavailableDates: [],
-      reservedDeskWorkstationRequiredDates: [],
-      unavailableCoworkTiers: [],
-      meetingRoomUnavailable: false,
-      officeUnavailable: false,
-      unavailableMonitorOptions: [],
-      notices: [],
-    });
+    return availableCalendar();
   });
 
-  render(
-    <QueryClientProvider client={queries}>
-      <TableReservationForm
-        capacities={[4, 6]}
-        checkoutCustomer={{ status: "signed-out" }}
-        initialValues={{
-          date,
-          startTime: "09:00",
-          endTime: "09:30",
-          seats: 4,
-          people: { contactAttends: true, invitees: [] },
-          name: "",
-          email: "",
-          phone: "",
-          marketingConsent: false,
-        }}
-        initialAdvertisedPrices={[]}
-        initialAvailability={[]}
-        locale={locale}
-        priorDateUnavailable
-        today={today.toString()}
-      />
-    </QueryClientProvider>
-  );
+  renderForm({ date, startTime: "09:00", endTime: "09:30", seats: 4 }, true);
 
   const start = screen.getByRole("combobox", { name: "Start time" });
   const end = screen.getByRole("combobox", { name: "End time" });
@@ -184,6 +200,48 @@ test("offers live starts and only the ends for the selected start, and reprices 
   expect(
     screen.getByText(m.reservationTableRestoredPastDate({}, { locale }))
   ).toBeDefined();
+});
+
+test("waits for a replacement table size before requesting calendar and slot availability", async () => {
+  const requests: { mode: string | null; seats: string | null }[] = [];
+  globalThis.fetch = stubFetch(async (input) => {
+    const { searchParams } = new URL(
+      String(input),
+      "https://workspace.example"
+    );
+    const mode = searchParams.get("mode");
+    const seats = searchParams.get("seats");
+    requests.push({ mode, seats });
+    return mode === "table-slots"
+      ? availableSlots(Number(seats), [
+          { startTime: "11:00", endTimes: ["11:15"] },
+        ])
+      : availableCalendar();
+  });
+
+  renderForm({ date, seats: 0, startTime: "", endTime: "" });
+  await act(async () => {});
+  expect(requests).toEqual([]);
+  expect(
+    screen.getByText(m.reservationTableRestoredSizeUnavailable({}, { locale }))
+  ).toBeDefined();
+  expect(
+    screen
+      .getAllByRole("radio", { name: /Table for/ })
+      .every((radio) => radio instanceof HTMLInputElement && !radio.checked)
+  ).toBe(true);
+
+  fireEvent.click(screen.getByRole("radio", { name: /Table for 6/ }));
+  const start = screen.getByRole("combobox", { name: "Start time" });
+  await within(start).findByRole("option", { name: "11:00 AM" });
+  expect(requests).toHaveLength(2);
+  expect(requests).toContainEqual({ mode: null, seats: "6" });
+  expect(requests).toContainEqual({ mode: "table-slots", seats: "6" });
+  expect(
+    screen.queryByText(
+      m.reservationTableRestoredSizeUnavailable({}, { locale })
+    )
+  ).toBeNull();
 });
 
 test("shows the appropriate degraded state without booking fields", () => {

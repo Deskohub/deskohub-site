@@ -665,8 +665,10 @@ const loadReservationPageContent = Effect.fn("reservationPage.loadContent")(
         ? { ...seededCustomer, continuesCheckout: false }
         : seededCustomer;
 
+    // A Team Table hold can still be replaced after its slot has ended.
+    // Clearing the old time must keep the hold's verified attendees.
     const restoredOfficeSelection =
-      selection.kind === "restored"
+      selection.kind === "restored" || definition.kind === "table"
         ? restoredReservation?.officeSelection
         : undefined;
     const heldOfficePrice =

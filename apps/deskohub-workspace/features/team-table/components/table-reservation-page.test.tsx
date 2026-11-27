@@ -1,8 +1,9 @@
 import "@/shared/testing/workspace-test-env";
 
-import { expect, mock, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
+import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -18,6 +19,28 @@ const { tableReservationPage } = await import("./table-reservation-page");
 const locale = "en-US";
 const today = getCurrentWorkspaceDate();
 const date = today.add({ days: 2 }).toString();
+
+const verifiedHold = (heldDate: string) => {
+  const interval = getTableReservationInterval(heldDate, "09:00", "10:15");
+  if (!interval) throw new Error("Expected a valid test interval");
+  return {
+    officeSelection: {
+      kind: "people" as const,
+      people: { contactAttends: false, invitees: [testEmailAddress("guest")] },
+    },
+    reservation: normalizedTableReservationOrderSchema.make({
+      kind: "table",
+      seats: 6,
+      ...interval,
+      name: "Ada Lovelace",
+      email: testEmailAddress("booker"),
+      phone: "+420777000111",
+      billing: defaultReservationBillingSelection,
+    }),
+    checkoutSessionId: checkoutSessionIdSchema.make("active-table-session"),
+    replacementToken: "verified-pay-state",
+  };
+};
 
 test("preloads the linked table size's six-month calendar and exact price request", async () => {
   const preloads = recordReservationPagePreloads();
@@ -78,13 +101,8 @@ test.each([
 ])(
   "requires an explicit replacement when a held Team Table size is retired: $capacities",
   async ({ capacities, expectedSeats, startTime, endTime }) => {
-    const interval = getTableReservationInterval(date, "09:00", "10:15");
-    if (!interval) throw new Error("Expected a valid test interval");
     const preloads = recordReservationPagePreloads();
-    const officeSelection = {
-      kind: "people" as const,
-      people: { contactAttends: false, invitees: [testEmailAddress("guest")] },
-    };
+    const hold = verifiedHold(date);
     const content = await Effect.runPromise(
       tableReservationPage
         .loadContent({
@@ -92,19 +110,7 @@ test.each([
           locale,
           pageData: capacities,
           searchParams: {},
-          restoredReservation: {
-            officeSelection,
-            reservation: normalizedTableReservationOrderSchema.make({
-              kind: "table",
-              seats: 6,
-              ...interval,
-              name: "Ada Lovelace",
-              email: testEmailAddress("booker"),
-              phone: "+420777000111",
-              billing: defaultReservationBillingSelection,
-            }),
-            replacementToken: "verified-pay-state",
-          },
+          restoredReservation: hold,
         })
         .pipe(Effect.provide(preloads.layer))
     );
@@ -116,9 +122,40 @@ test.each([
       startTime,
       endTime,
     });
-    expect(content.form.checkoutOfficeSelection).toEqual(officeSelection);
+    expect(content.form.checkoutOfficeSelection).toEqual(hold.officeSelection);
     const preload = preloads.availabilityPreloads[0];
     expect(preload?.replacementToken).toBe("verified-pay-state");
     expect(preload?.queries.length).toBe(expectedSeats ? 1 : 0);
   }
 );
+
+test("keeps verified guests when the slot has ended and the checkout hold can still be replaced", async () => {
+  const hold = verifiedHold(today.toString());
+  const now = Temporal.Instant.from(hold.reservation.endsAt).add({
+    minutes: 1,
+  });
+  const preloads = recordReservationPagePreloads();
+  const clock = spyOn(Temporal.Now, "instant").mockReturnValue(now);
+  const content = await Effect.runPromise(
+    tableReservationPage
+      .loadContent({
+        checkoutAccount: { status: "signed-out" },
+        locale,
+        pageData: [4, 6],
+        searchParams: {},
+        restoredReservation: hold,
+      })
+      .pipe(Effect.provide(preloads.layer))
+  ).finally(() => clock.mockRestore());
+
+  expect(content.kind).toBe("form");
+  if (content.kind !== "form") throw new Error("Expected a booking form");
+  expect(content.form.initialValues).toMatchObject({
+    date: today.toString(),
+    startTime: "",
+    endTime: "",
+  });
+  expect(content.form.checkoutSessionId).toEqual(hold.checkoutSessionId);
+  expect(content.form.replacementToken).toBe(hold.replacementToken);
+  expect(content.form.checkoutOfficeSelection).toEqual(hold.officeSelection);
+});
