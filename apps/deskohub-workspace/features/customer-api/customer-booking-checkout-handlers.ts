@@ -58,6 +58,7 @@ import {
   resolveBookingQuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
 import { requireCoworkPassesRelease } from "@/features/reservation/backend/entry-pack-booking";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { providePerRequest } from "@/shared/backend/provide-per-request";
 import { getFirstInvalidFieldPath } from "@/shared/utils/schema-issue";
@@ -209,7 +210,8 @@ const checkoutRequestLayers = Effect.gen(function* () {
   );
   const forRequest = <A, E, R>(
     referralCode: string | undefined,
-    services: Layer.Layer<A, E, R>
+    services: Layer.Layer<A, E, R>,
+    tableRelease = teamTableRelease
   ) =>
     Layer.mergeAll(
       operations.pipe(Layer.provide(authentication)),
@@ -222,7 +224,7 @@ const checkoutRequestLayers = Effect.gen(function* () {
           releases.referral,
           releases.office,
           releases.overnightStay,
-          teamTableRelease
+          tableRelease
         )
       )
     );
@@ -238,16 +240,24 @@ export const customerTeamTableCheckout = Effect.gen(function* () {
   ) =>
     requireCustomerTeamTableRelease.pipe(
       Effect.andThen(
-        resolveCheckoutSelection(payload).pipe(
-          answerTeamTableSelectionFailure(operation),
-          Effect.flatMap((selection) =>
-            createCheckout(
-              payload,
-              selection,
-              () => new CustomerTeamTableUnavailable()
+        Effect.flatMap(TeamTableReleaseGate, (release) =>
+          resolveCheckoutSelection(payload).pipe(
+            answerTeamTableSelectionFailure(operation),
+            Effect.flatMap((selection) =>
+              createCheckout(
+                payload,
+                selection,
+                () => new CustomerTeamTableUnavailable()
+              )
+            ),
+            providePerRequest(
+              forRequest(
+                referralCode,
+                Layer.empty,
+                Layer.succeed(TeamTableReleaseGate, release)
+              )
             )
-          ),
-          providePerRequest(forRequest(referralCode, Layer.empty))
+          )
         )
       ),
       providePerRequest(teamTableRelease),

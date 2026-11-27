@@ -198,6 +198,38 @@ describe("Team Table booking", () => {
     });
   });
 
+  test("shares one release decision across selection and checkout for each request", async () => {
+    const answers = await answerInEachReleaseCohort({
+      serve: (flags) =>
+        makeCustomerApiTestServer({
+          bookingCatalog: {
+            ...openCatalog,
+            teamTableRelease: releaseGateForRunOverFlags(
+              TeamTableReleaseGate,
+              flags
+            ),
+          },
+          bookingCheckout: {
+            inventory,
+            operations: Layer.mock(CustomerCheckoutOperations, {
+              preparePayState: () =>
+                Effect.fail(
+                  new WorkspaceTableUnavailableError({
+                    date,
+                    reservation: { kind: "table" },
+                  })
+                ),
+            }),
+          },
+        }),
+      send: (cohort) =>
+        customerApiRequest(inReleaseCohort(bookingCalls[3], cohort)),
+    });
+    expectEachCohortAnsweredAlone(answers);
+    expect(answers.alone.open.status).toBe(409);
+    expect(answers.alone.closed.status).toBe(404);
+  });
+
   test("reads the six-month calendar and exact date's available start/end matrix", async () => {
     const range = getWorkspaceAvailabilityRange(
       getCurrentWorkspaceDate().toString()
@@ -302,6 +334,7 @@ describe("Team Table booking", () => {
             key: "order",
             items: expect.arrayContaining([
               expect.objectContaining({
+                seats: 4,
                 baseAmount: { value: 24_000, currency: "CZK", exponent: 2 },
                 usageAmount: { value: 10_000, currency: "CZK", exponent: 2 },
               }),
@@ -380,7 +413,7 @@ describe("Team Table reservation management", () => {
             getAccess: () =>
               Effect.succeed({
                 state: "available",
-                viewer: "customer",
+                viewer: "invitee",
                 code: "0000",
                 accessStartsAt: Temporal.Instant.from(startsAt),
                 accessEndsAt: Temporal.Instant.from(endsAt),
@@ -449,11 +482,13 @@ describe("Team Table reservation management", () => {
       current: [
         {
           orderId,
-          product: { kind: "other", teamTable: tableProduct },
+          product: { kind: "other", family: "table", teamTable: tableProduct },
           productName: "Team Table",
         },
       ],
-      unavailable: [{ id: "provider-only", product: { kind: "other" } }],
+      unavailable: [
+        { id: "provider-only", product: { kind: "other", family: "table" } },
+      ],
     });
     const access = await api.handle(
       customerApiRequest({
