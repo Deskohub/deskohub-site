@@ -214,7 +214,7 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   if (hasReservationIntervalEnded(interval, input.now)) {
     return refused("not_retryable");
   }
-  const reservationHoldExpiresAt = getReservationHoldExpiresAt(input.now);
+  const proposedHoldExpiresAt = getReservationHoldExpiresAt(input.now);
   const book = Effect.fnUntraced(function* (
     capacity?: TeamTableBookingCapacity
   ) {
@@ -234,6 +234,7 @@ const bookAgain = Effect.fnUntraced(function* (input: {
         owner: {
           purpose: "payment_retry",
           paymentAttemptId: request.retriedAttemptId,
+          retryExpiresAt: proposedHoldExpiresAt,
         },
         releasedReservationId: order.dotyposReservationId ?? undefined,
         assign: capacity.assignTableId,
@@ -268,6 +269,29 @@ const bookAgain = Effect.fnUntraced(function* (input: {
     if (settled === "changed") return refused("changed");
     if (!settled) return { kind: "spot_unavailable" } as const;
 
+    const compensate = () =>
+      team?.kind === "active" && Option.isSome(claims)
+        ? claims.value.compensateReplacement(
+            team.claim,
+            order.dotyposCustomerId,
+            team.record,
+            input.now
+          )
+        : Effect.succeed(false);
+    const reservationHoldExpiresAt =
+      (team?.kind === "active" ? team.claim.retryExpiresAt : null) ??
+      proposedHoldExpiresAt;
+    if (
+      team?.kind === "active" &&
+      Temporal.Instant.compare(
+        reservationHoldExpiresAt,
+        yield* currentInstant
+      ) <= 0
+    ) {
+      yield* compensate();
+      return { kind: "spot_unavailable" } as const;
+    }
+
     const reservations = yield* WorkspaceReservationRepository;
     const attachResult = yield* reservations
       .attachRetryHold({
@@ -285,15 +309,6 @@ const bookAgain = Effect.fnUntraced(function* (input: {
         }),
         Effect.result
       );
-    const compensate = () =>
-      team?.kind === "active" && Option.isSome(claims)
-        ? claims.value.compensateReplacement(
-            team.claim,
-            order.dotyposCustomerId,
-            team.record,
-            input.now
-          )
-        : Effect.succeed(false);
     if (Result.isFailure(attachResult)) {
       if (team?.kind === "active" && Option.isSome(claims)) {
         const persisted = yield* reservations.findById(order.id);
@@ -340,11 +355,14 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   const result = yield* input.teamCapacity
     ? input.teamCapacity.withCapacity(book)
     : withWorkspaceReservationCapacity(interval, book());
-  if (result.kind === "reacquired") {
+  if (
+    result.kind === "reacquired" &&
+    result.reservation.reservationHoldExpiresAt
+  ) {
     // The periodic recovery finds an expired hold if its job was not scheduled.
     yield* enqueueReservationHoldCleanup({
       orderId: order.id,
-      reservationHoldExpiresAt,
+      reservationHoldExpiresAt: result.reservation.reservationHoldExpiresAt,
     });
   }
   return result;

@@ -17,7 +17,7 @@ import { decodeBookedReservation } from "@/features/reservation/backend/booked-r
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { TableReservationDetails } from "@/features/reservation/table-reservation";
-import { temporalInstantToDate } from "@/shared/utils/temporal";
+import { currentInstant, temporalInstantToDate } from "@/shared/utils/temporal";
 
 export type TeamTableHoldClaim = typeof teamTableHoldClaims.$inferSelect;
 type HoldClaim = TeamTableHoldClaim;
@@ -25,9 +25,25 @@ type ClaimKey = Pick<HoldClaim, "reservationId" | "generation">;
 type TeamTableClaimOwner =
   | { readonly purpose: "checkout" }
   | {
-      readonly purpose: "payment_retry" | "late_payment";
+      readonly purpose: "payment_retry";
+      readonly paymentAttemptId: PaymentAttemptId;
+      readonly retryExpiresAt: Temporal.Instant;
+    }
+  | {
+      readonly purpose: "late_payment";
       readonly paymentAttemptId: PaymentAttemptId;
     };
+
+/** Older unattached retry claims without a deadline are due for verification. */
+export const isExpiredUnattachedPaymentRetry = (
+  claim: HoldClaim,
+  now: Temporal.Instant
+) =>
+  claim.purpose === "payment_retry" &&
+  claim.attachedAt === null &&
+  claim.retiredAt === null &&
+  (claim.retryExpiresAt === null ||
+    Temporal.Instant.compare(claim.retryExpiresAt, now) <= 0);
 
 const marker = (generation: string) => `Team Table hold: ${generation}`;
 
@@ -310,6 +326,11 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
         if (ownerMatches && existing.retiredAt)
           return { kind: "released", claim: existing } as const;
         if (ownerMatches && !existing.cancelRequestedAt) {
+          if (
+            existing.purpose === "payment_retry" &&
+            isExpiredUnattachedPaymentRetry(existing, yield* currentInstant)
+          )
+            return { kind: "pending" } as const;
           const receipt = yield* inspect(existing, input.customerId);
           if (receipt.kind === "active" && receipt.record.status === status) {
             yield* remember(existing, [receipt.record.id]);
@@ -342,6 +363,14 @@ const makeTeamTableHoldClaims = Effect.gen(function* () {
         yield* clear(existing);
       }
       const tableId = yield* input.assign;
+      if (
+        input.owner.purpose === "payment_retry" &&
+        Temporal.Instant.compare(
+          input.owner.retryExpiresAt,
+          yield* currentInstant
+        ) <= 0
+      )
+        return { kind: "pending" } as const;
       const claim = getTeamTableHoldClaim(
         input.reservationId,
         tableId,

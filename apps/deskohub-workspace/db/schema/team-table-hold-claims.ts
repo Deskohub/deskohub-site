@@ -35,6 +35,8 @@ export const teamTableHoldClaims = pgTable(
       .notNull()
       .default("checkout"),
     paymentAttemptId: text("payment_attempt_id").$type<PaymentAttemptId>(),
+    /** A payment retry's fixed deadline, recorded before creating its hold. */
+    retryExpiresAt: instant("retry_expires_at"),
     attachedAt: instant("attached_at"),
     cancelRequestedAt: instant("cancel_requested_at"),
     retiredAt: instant("retired_at"),

@@ -9,9 +9,12 @@ import {
   getWorkspaceDate,
 } from "@/features/reservation/reservation-date";
 import { getPlainDatesBetween } from "@/shared/utils/temporal";
-import { TeamTableHoldClaims } from "./team-table-hold-claims";
+import {
+  isExpiredUnattachedPaymentRetry,
+  TeamTableHoldClaims,
+} from "./team-table-hold-claims";
 
-/** Close expired checkout attempts and retire their generation's provider hold. */
+/** Close expired checkout and payment retry holds once Dotypos settles them. */
 export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
   function* ({
     now,
@@ -61,7 +64,16 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
             ]),
             isNull(teamTableHoldClaims.attachedAt),
             isNull(teamTableHoldClaims.retiredAt),
-            lte(teamTableHoldClaims.endsAt, now)
+            or(
+              lte(teamTableHoldClaims.endsAt, now),
+              and(
+                eq(teamTableHoldClaims.purpose, "payment_retry"),
+                or(
+                  isNull(teamTableHoldClaims.retryExpiresAt),
+                  lte(teamTableHoldClaims.retryExpiresAt, now)
+                )
+              )
+            )
           )
         )
       )
@@ -85,6 +97,7 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
           Temporal.Instant.compare(row.reservationHoldExpiresAt, now) <= 0;
         if (expiredCheckout) yield* claims.expireCheckout(id, now);
         if (!fresh) return;
+        if (fresh.purpose === "payment_retry" && fresh.retiredAt) return;
         // A crash after the local attach may leave only its provider id
         // recorded. That committed attachment supersedes cancellation.
         if (
@@ -98,7 +111,14 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
           return;
         }
         const ended = Temporal.Instant.compare(fresh.endsAt, now) <= 0;
-        if (!expiredCheckout && !fresh.cancelRequestedAt && !ended) return;
+        if (
+          !expiredCheckout &&
+          !fresh.cancelRequestedAt &&
+          !ended &&
+          !isExpiredUnattachedPaymentRetry(fresh, now)
+        ) {
+          return;
+        }
         yield* db
           .update(teamTableHoldClaims)
           .set({ checkedAt: now })
@@ -111,8 +131,11 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
           const expected =
             fresh.purpose === "late_payment" ? "CONFIRMED" : "NEW";
           if (receipt.record.status !== expected) {
-            if (!ended) return;
+            if (!ended || fresh.purpose === "payment_retry") return;
           } else {
+            // A cancelled receipt no longer appears in the active listing.
+            if (fresh.purpose === "payment_retry")
+              yield* claims.remember(fresh, [receipt.record.id]);
             if (
               !(yield* claims.cancel(
                 fresh,
@@ -125,7 +148,10 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
           }
         } else if (receipt.kind === "absent") {
           cancelledId = fresh.providerReservationIds?.[0];
-        } else if (receipt.kind === "unresolved" && !ended) {
+        } else if (
+          receipt.kind === "unresolved" &&
+          (!ended || fresh.purpose === "payment_retry")
+        ) {
           return;
         }
         if (fresh.purpose === "checkout") {

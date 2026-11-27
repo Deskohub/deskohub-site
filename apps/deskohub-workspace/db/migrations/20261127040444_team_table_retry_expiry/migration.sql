@@ -1,0 +1,1 @@
+ALTER TABLE "team_table_hold_claims" ADD COLUMN "retry_expires_at" timestamp with time zone;
