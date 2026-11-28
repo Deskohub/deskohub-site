@@ -1,4 +1,6 @@
 import { algoPinLength } from "@deskohub/igloohome";
+import { Array as EffectArray } from "effect";
+import type { Json } from "effect/Schema";
 import { escapeRegExp } from "@/shared/utils/escape-regexp";
 import { redactDiagnosticText } from "../redaction";
 
@@ -54,20 +56,25 @@ export const redactAgentEvalOutput = (
  * Redacts every string in a JSON value, such as a saved judge input, the way
  * `redactAgentEvalOutput` redacts text. Keys and non-string values stay.
  */
-export const redactAgentEvalValue = <Value>(
-  value: Value,
+export const redactAgentEvalValue = (
+  value: Json,
   identifiers: readonly string[]
-): Value => {
-  const redact = (node: unknown): unknown => {
-    if (typeof node === "string")
-      return redactAgentEvalOutput(node, identifiers);
-    if (Array.isArray(node)) return node.map(redact);
-    if (node !== null && typeof node === "object") {
-      return Object.fromEntries(
-        Object.entries(node).map(([key, entry]) => [key, redact(entry)])
-      );
-    }
-    return node;
-  };
-  return redact(value) as Value;
+): Json => {
+  if (typeof value === "string") {
+    return redactAgentEvalOutput(value, identifiers);
+  }
+  if (EffectArray.isArray<Json>(value)) {
+    return value.map((entry) => redactAgentEvalValue(entry, identifiers));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).flatMap((key) => {
+        const entry = value[key];
+        return entry === undefined
+          ? []
+          : [[key, redactAgentEvalValue(entry, identifiers)] as const];
+      })
+    );
+  }
+  return value;
 };

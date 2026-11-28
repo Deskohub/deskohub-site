@@ -18,6 +18,7 @@ import {
   waitForReactHydration,
 } from "../browser";
 import type {
+  BrowserPageFunction,
   E2EBrowserSession,
   OpenE2EBrowserSession,
 } from "../browser-session";
@@ -643,7 +644,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
   // An evaluation that overruns its bound fails rather than timing out.
   const evaluate = <A, Arg>(
     label: string,
-    read: (arg: Arg) => A | Promise<A>,
+    read: BrowserPageFunction<Arg, A>,
     arg: Arg
   ) =>
     withLaneSession((laneSession) =>
@@ -653,7 +654,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
     );
   const waitFor = <Arg>(
     description: string,
-    condition: (arg: Arg) => unknown,
+    condition: BrowserPageFunction<Arg, unknown>,
     arg: Arg,
     timeoutMs: number
   ) =>
@@ -818,7 +819,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
               accountProfileFieldSelectors.billingCompanyName,
               drafts.billingCompanyName,
             ],
-          ],
+          ] as const,
           profile: (["firstName", "lastName", "phone"] as const).map(
             (field) =>
               [accountProfileFieldSelectors[field], drafts[field]] as const

@@ -31,6 +31,39 @@ describe("decodeVercelDeployment", () => {
     });
   });
 
+  test("treats missing project identity as a project mismatch", () => {
+    expect(
+      decodeVercelDeployment(
+        { ...payload, projectId: undefined },
+        "prj_workspace"
+      )
+    ).toEqual({ kind: "project-mismatch" });
+  });
+
+  test("leaves unrecognized optional metadata undefined", () => {
+    expect(
+      decodeVercelDeployment(
+        {
+          ...payload,
+          meta: { githubCommitSha: 42 },
+          readyState: 42,
+          target: false,
+        },
+        "prj_workspace"
+      )
+    ).toEqual({
+      deployment: {
+        githubCommitSha: undefined,
+        id: payload.id,
+        ownerId: payload.ownerId,
+        projectId: payload.projectId,
+        readyState: undefined,
+        target: undefined,
+      },
+      kind: "match",
+    });
+  });
+
   test.each([
     ["no record", null],
     ["no id", { ...payload, id: "" }],

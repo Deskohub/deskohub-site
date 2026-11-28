@@ -94,12 +94,12 @@ const accountLayoutSections = [
 type AccountLayoutNavigationDiagnosticCode =
   `account_layout_${(typeof accountLayoutNavigationPhases)[number]}_${(typeof accountLayoutSections)[number]}_failed`;
 
-const accountLayoutNavigationDiagnosticCodes =
+const accountLayoutNavigationDiagnosticCodes: readonly AccountLayoutNavigationDiagnosticCode[] =
   accountLayoutNavigationPhases.flatMap((phase) =>
     accountLayoutSections.map(
       (section) => `account_layout_${phase}_${section}_failed` as const
     )
-  ) as AccountLayoutNavigationDiagnosticCode[];
+  );
 
 const workspaceE2EAccountPasskeyDiagnosticCodes = [
   "account_passkey_authenticator_failed",

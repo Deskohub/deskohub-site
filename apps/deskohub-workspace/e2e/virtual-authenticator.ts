@@ -1,4 +1,5 @@
 import type { CDPSession, Page } from "@playwright/test";
+import { Schema } from "effect";
 
 /**
  * A platform passkey authenticator as Chromium's WebAuthn domain emulates it:
@@ -70,7 +71,36 @@ export type PageVirtualAuthenticator = VirtualAuthenticator & {
   readonly answerModalCeremony: <A>(ceremony: () => Promise<A>) => Promise<A>;
 };
 
-export type VirtualAuthenticatorSession = Pick<CDPSession, "detach" | "send">;
+type VirtualAuthenticatorCommand =
+  | "WebAuthn.addVirtualAuthenticator"
+  | "WebAuthn.disable"
+  | "WebAuthn.enable"
+  | "WebAuthn.getCredentials"
+  | "WebAuthn.removeVirtualAuthenticator"
+  | "WebAuthn.setAutomaticPresenceSimulation";
+
+declare const sendCommand: CDPSession["send"];
+export type VirtualAuthenticatorSession = {
+  readonly detach: CDPSession["detach"];
+  readonly send: <Command extends VirtualAuthenticatorCommand>(
+    ...args: Parameters<typeof sendCommand<Command>>
+  ) => Promise<unknown>;
+};
+
+const isAuthenticator = Schema.is(
+  Schema.Struct({ authenticatorId: Schema.String })
+);
+
+const hasStoredCredentials = Schema.is(
+  Schema.Struct({
+    credentials: Schema.Array(
+      Schema.Struct({
+        isResidentCredential: Schema.Boolean,
+        rpId: Schema.optionalKey(Schema.String),
+      })
+    ),
+  })
+);
 
 /** How a sign-in (`credentials.get`) request the page started settled. */
 type WebAuthnSignInRequestOutcome = {
@@ -321,10 +351,12 @@ const attachVirtualAuthenticatorControl = async (
   let authenticatorId: string;
   try {
     await session.send("WebAuthn.enable", { enableUI: false });
-    ({ authenticatorId } = await session.send(
-      "WebAuthn.addVirtualAuthenticator",
-      { options: virtualPlatformAuthenticatorOptions }
-    ));
+    const result = await session.send("WebAuthn.addVirtualAuthenticator", {
+      options: virtualPlatformAuthenticatorOptions,
+    });
+    if (!isAuthenticator(result))
+      throw new Error("Chromium returned an invalid virtual authenticator.");
+    authenticatorId = result.authenticatorId;
   } catch (cause) {
     await session.detach().catch(() => undefined);
     throw cause;
@@ -349,10 +381,12 @@ const attachVirtualAuthenticatorControl = async (
       }
     },
     readCredentials: async () => {
-      const { credentials } = await session.send("WebAuthn.getCredentials", {
+      const result = await session.send("WebAuthn.getCredentials", {
         authenticatorId,
       });
-      return credentials.map((credential) => ({
+      if (!hasStoredCredentials(result))
+        throw new Error("Chromium returned invalid virtual credentials.");
+      return result.credentials.map((credential) => ({
         isResidentCredential: credential.isResidentCredential,
         rpId: credential.rpId,
       }));

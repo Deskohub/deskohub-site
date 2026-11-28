@@ -1,16 +1,33 @@
 import { readFile } from "node:fs/promises";
+import { Result, Schema } from "effect";
 import { writeJsonAtomically } from "./runtime";
 
-export type ReservationIntent = {
-  readonly id: string;
-  readonly caseId: string;
-  readonly runId: string;
-  readonly owner: { readonly email: string } | { readonly customerId: string };
-  readonly startDate: string;
-  readonly endDate: string;
-  readonly orderId?: string;
-  readonly reservationId?: string;
-};
+export const reservationIntentSchema = Schema.Struct({
+  id: Schema.NonEmptyString,
+  caseId: Schema.String,
+  runId: Schema.String,
+  owner: Schema.Union([
+    Schema.Struct({ email: Schema.NonEmptyString }),
+    Schema.Struct({
+      email: Schema.optionalKey(Schema.Never),
+      customerId: Schema.NonEmptyString,
+    }),
+  ]),
+  startDate: Schema.String,
+  endDate: Schema.String,
+  orderId: Schema.optional(Schema.String),
+  reservationId: Schema.optional(Schema.String),
+});
+
+export type ReservationIntent = typeof reservationIntentSchema.Type;
+
+const reservationJournalSchema = Schema.Record(Schema.String, Schema.Unknown);
+const decodeReservationJournal = Schema.decodeUnknownResult(
+  reservationJournalSchema
+);
+const hasPersistedIntentIds = Schema.is(
+  Schema.Array(Schema.Struct({ id: Schema.String }))
+);
 
 // A journal has one worker owner. Serialize its fixture and intent writes too.
 const pending = new Map<string, Promise<void>>();
@@ -24,16 +41,7 @@ export const writeReservationJournal = (
   const write = previous.then(async () => {
     const existing = await readReservationJournal(path);
     const intents = existing?.reservationIntents ?? [];
-    if (
-      !Array.isArray(intents) ||
-      !intents.every(
-        (entry): entry is { readonly id: string } =>
-          typeof entry === "object" &&
-          entry !== null &&
-          "id" in entry &&
-          typeof entry.id === "string"
-      )
-    )
+    if (!hasPersistedIntentIds(intents))
       throw new Error("Invalid reservation intents");
     await writeJsonAtomically(path, {
       ...existing,
@@ -49,15 +57,14 @@ export const writeReservationJournal = (
   });
 };
 
-export const readReservationJournal = async (
-  path: string
-): Promise<Record<string, unknown> | undefined> => {
+export const readReservationJournal = async (path: string) => {
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    const journal = decodeReservationJournal(value);
+    if (Result.isFailure(journal)) {
       throw new Error("Invalid reservation journal");
     }
-    return value as Record<string, unknown>;
+    return journal.success;
   } catch (cause) {
     if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
       return undefined;

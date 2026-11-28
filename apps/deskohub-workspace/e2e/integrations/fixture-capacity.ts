@@ -9,11 +9,7 @@ import {
   TokenResponse,
 } from "@deskohub/dotypos/generated";
 import { Context, Effect, Layer, Logger, Schema, Stream } from "effect";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-} from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import type { DatasourceConfig } from "../config";
 import { type WorkspaceE2EError, workspaceE2EError } from "../errors";
 import { fixtureCapacityWindows } from "../fixture-capacity";

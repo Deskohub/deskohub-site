@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import {
   asRecord,
+  decodeArtifactJson,
   sanitizeArtifactText,
   sanitizeHarEntry,
   sanitizeHarNamedValues,
@@ -138,7 +139,7 @@ const parseTraceEvents = (bytes: Uint8Array): unknown[] =>
   strFromU8(bytes)
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line));
+    .map((line) => decodeArtifactJson(line));
 
 const credentialHeaderNames = new Set([
   "authorization",
@@ -251,7 +252,7 @@ const redactCredentialFields = (value: unknown, key?: string): unknown => {
       key === "cookies" || key === "headers" || key === "extraHTTPHeaders"
         ? sanitizeHarNamedValues(value)
         : value;
-    return (items as unknown[]).map((item) => redactCredentialFields(item));
+    return items.map((item: unknown) => redactCredentialFields(item));
   }
   const record = asRecord(value);
   if (!record) return value;

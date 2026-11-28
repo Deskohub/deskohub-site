@@ -4,6 +4,10 @@ import { workspaceE2EError, workspaceE2ETimeoutError } from "./errors";
 import { workspaceE2ETimeouts } from "./timeouts";
 
 type PreviewAccessCookie = Parameters<BrowserContext["addCookies"]>[0][number];
+export type PreviewAccessFetch = (
+  url: URL,
+  init: RequestInit
+) => Promise<Response>;
 
 /**
  * Lets a browser context through Vercel protection on a Workspace preview
@@ -22,7 +26,7 @@ export const primePreviewAccess = async (
   baseUrl: string | undefined,
   bypassSecret: string | undefined,
   options: {
-    readonly fetch?: typeof fetch;
+    readonly fetch?: PreviewAccessFetch;
     readonly signal?: AbortSignal;
     readonly timeoutMs?: number;
   } = {}

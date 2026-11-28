@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import { withE2ERuntime } from "./runtime-fixture";
 
@@ -29,26 +29,35 @@ const readPoolId = Effect.gen(function* () {
   return (yield* TestPool).id;
 });
 
-type ExportedSpan = {
-  readonly name: string;
-  readonly parentSpanId?: string;
-  readonly traceId: string;
-};
-
-type OtlpTraceRequest = {
-  readonly resourceSpans?: readonly {
-    readonly scopeSpans?: readonly {
-      readonly spans?: readonly ExportedSpan[];
-    }[];
-  }[];
-};
+const exportedSpanSchema = Schema.Struct({
+  name: Schema.String,
+  parentSpanId: Schema.optionalKey(Schema.String),
+  traceId: Schema.String,
+});
+const decodeOtlpTraceRequest = Schema.decodeUnknownSync(
+  Schema.Struct({
+    resourceSpans: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          scopeSpans: Schema.optionalKey(
+            Schema.Array(
+              Schema.Struct({
+                spans: Schema.optionalKey(Schema.Array(exportedSpanSchema)),
+              })
+            )
+          ),
+        })
+      )
+    ),
+  })
+);
 
 /** A local OTLP endpoint standing in for PostHog, recording every span. */
 const serveTraceSink = () => {
-  const spans: ExportedSpan[] = [];
+  const spans: (typeof exportedSpanSchema.Type)[] = [];
   const server = Bun.serve({
     fetch: async (request) => {
-      const body = (await request.json()) as OtlpTraceRequest;
+      const body = decodeOtlpTraceRequest(await request.json());
       for (const resource of body.resourceSpans ?? []) {
         for (const scope of resource.scopeSpans ?? []) {
           spans.push(...(scope.spans ?? []));

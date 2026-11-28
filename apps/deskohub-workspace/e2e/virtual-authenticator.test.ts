@@ -20,7 +20,10 @@ const makeSession = (
     detach: async () => {
       session.detached += 1;
     },
-    send: async (method: string, params?: unknown) => {
+    send: async (
+      method: Parameters<VirtualAuthenticatorSession["send"]>[0],
+      params?: Parameters<VirtualAuthenticatorSession["send"]>[1]
+    ) => {
       commands.push({ method, params });
       if (method === "WebAuthn.addVirtualAuthenticator") {
         if (options.failAdd) throw new Error("WebAuthn is unavailable");
@@ -43,10 +46,7 @@ const makeSession = (
       return {};
     },
   };
-  return session as unknown as VirtualAuthenticatorSession & {
-    readonly commands: SentCommand[];
-    detached: number;
-  };
+  return session;
 };
 
 test("adds a CTAP2 internal discoverable authenticator that waits for presence", async () => {

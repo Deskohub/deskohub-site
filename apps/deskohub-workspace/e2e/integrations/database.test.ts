@@ -1,8 +1,22 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import {
+  DotyposBranchIdSchema,
+  DotyposClientIdSchema,
+  DotyposCloudIdSchema,
+  DotyposEmployeeIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
+import { workspaceReservationIdSchema } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
 import { sql } from "drizzle-orm";
-import { Cause, Effect, Exit, Fiber, Layer } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Option } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
+import type { latePaymentRecoveries } from "@/db/schema";
+import {
+  checkoutAttemptKeySchema,
+  checkoutSessionKeySchema,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
 import { workspaceE2ETimeouts } from "../timeouts";
 import type { CheckoutRow } from "../types";
@@ -18,58 +32,60 @@ import {
 } from "./database";
 import { E2EDatabase } from "./database.service";
 
+const originalReservationId = DotyposReservationIdSchema.make(
+  "original-reservation"
+);
+const replacementReservationId = DotyposReservationIdSchema.make(
+  "replacement-reservation"
+);
+const reservationId = workspaceReservationIdSchema.make("reservation-1");
+
 test("accepts a recreated late-payment recovery", async () => {
   await Effect.runPromise(
     assertLatePaymentRecoveryOutcome(
       {
-        checkoutRow: {
-          dotypos_reservation_id: "replacement-reservation",
-          failure_code: null,
+        checkoutRow: makeCheckoutRow({
+          dotypos_reservation_id: replacementReservationId,
           fulfillment_state: "processing",
           payment_attempt_state: "paid",
           payment_state: "paid",
           reservation_state: "confirmed",
           webhook_state: "processed",
-        } as CheckoutRow,
-        recovery: {
-          completedAt: {} as never,
-          failureCode: null,
-          originalDotyposReservationId: "original-reservation",
-          recoveredDotyposReservationId: "replacement-reservation",
+        }),
+        recovery: makeLatePaymentRecovery({
+          recoveredDotyposReservationId: replacementReservationId,
           state: "recovered",
-        } as never,
+        }),
       },
-      "original-reservation" as never,
+      originalReservationId,
       { state: "recovered" }
     )
   );
 });
 
 test("accepts a refund-required late-payment recovery", async () => {
+  const failureCode = "late_payment_snapshot_unavailable";
+
   await Effect.runPromise(
     assertLatePaymentRecoveryOutcome(
       {
-        checkoutRow: {
-          dotypos_reservation_id: "original-reservation",
-          failure_code: "late_payment_snapshot_unavailable",
-          fulfillment_state: "not_started",
+        checkoutRow: makeCheckoutRow({
+          dotypos_reservation_id: originalReservationId,
+          failure_code: failureCode,
           payment_attempt_state: "paid",
           payment_state: "paid",
           reservation_state: "cancelled",
           webhook_state: "processed",
-        } as CheckoutRow,
-        recovery: {
-          completedAt: {} as never,
-          failureCode: "late_payment_snapshot_unavailable",
-          originalDotyposReservationId: "original-reservation",
-          recoveredDotyposReservationId: null,
+        }),
+        recovery: makeLatePaymentRecovery({
+          failureCode,
           state: "refund_required",
-        } as never,
+        }),
       },
-      "original-reservation" as never,
+      originalReservationId,
       {
         state: "refund_required",
-        failureCode: "late_payment_snapshot_unavailable",
+        failureCode,
       }
     )
   );
@@ -164,86 +180,58 @@ test("classifies provider session rows after the hosted redirect barrier", () =>
   expect(getProviderSessionRowDiagnosticCode(undefined)).toBe(
     "provider_session_reservation_missing_after_redirect"
   );
+  expect(getProviderSessionRowDiagnosticCode(makeCheckoutRow())).toBe(
+    "provider_session_active_attempt_missing_after_redirect"
+  );
   expect(
-    getProviderSessionRowDiagnosticCode({
-      reservation_id: "reservation-1",
-    } as CheckoutRow)
-  ).toBe("provider_session_active_attempt_missing_after_redirect");
-  expect(
-    getProviderSessionRowDiagnosticCode({
-      amount_value: 100,
-      currency: "EUR",
-      payment_attempt_id: "attempt-1",
-      provider_order_id: "provider-order-1",
-      reservation_id: "reservation-1",
-    } as CheckoutRow)
+    getProviderSessionRowDiagnosticCode(
+      makeHostedCheckoutRow({
+        provider_redirect_url: null,
+        security_token: null,
+      })
+    )
   ).toBe("provider_session_fields_missing_after_redirect");
   expect(
-    getProviderSessionRowDiagnosticCode({
-      amount_value: 100,
-      currency: "EUR",
-      payment_attempt_id: "attempt-1",
-      provider_order_id: "provider-order-1",
-      provider_redirect_url: "https://provider.example/hosted",
-      reservation_id: "reservation-1",
-      security_token: "",
-    } as CheckoutRow)
+    getProviderSessionRowDiagnosticCode(
+      makeHostedCheckoutRow({ security_token: "" })
+    )
   ).toBe("provider_session_fields_missing_after_redirect");
   expect(
-    getProviderSessionRowDiagnosticCode({
-      amount_value: 100,
-      currency: "EUR",
-      payment_attempt_id: "attempt-1",
-      provider_order_id: "provider-order-1",
-      provider_redirect_url: "https://provider.example/hosted",
-      reservation_id: "reservation-1",
-      security_token: "security-token",
-    } as CheckoutRow)
+    getProviderSessionRowDiagnosticCode(makeHostedCheckoutRow())
   ).toBeUndefined();
 });
 
 test("stops waiting for the preview fulfillment marker once the order cannot fulfill", () => {
-  const row = (overrides: Partial<CheckoutRow>) =>
-    ({
-      fulfillment_state: "not_started",
-      payment_state: "pending",
-      ...overrides,
-    }) as CheckoutRow;
-
   expect(getPreviewFulfillmentMarkerDiagnosticCode(undefined)).toBeUndefined();
-  expect(getPreviewFulfillmentMarkerDiagnosticCode(row({}))).toBeUndefined();
+  expect(
+    getPreviewFulfillmentMarkerDiagnosticCode(makeCheckoutRow())
+  ).toBeUndefined();
   expect(
     getPreviewFulfillmentMarkerDiagnosticCode(
-      row({ fulfillment_state: "processing", payment_state: "paid" })
+      makeCheckoutRow({
+        fulfillment_state: "processing",
+        payment_state: "paid",
+      })
     )
   ).toBeUndefined();
-  for (const payment_state of ["failed", "cancelled", "expired"]) {
+  for (const payment_state of ["failed", "cancelled", "expired"] as const) {
     expect(
-      getPreviewFulfillmentMarkerDiagnosticCode(row({ payment_state }))
+      getPreviewFulfillmentMarkerDiagnosticCode(
+        makeCheckoutRow({ payment_state })
+      )
     ).toBe("checkout_payment_terminal_before_fulfillment");
   }
   expect(
     getPreviewFulfillmentMarkerDiagnosticCode(
-      row({ fulfillment_state: "failed", payment_state: "paid" })
+      makeCheckoutRow({ fulfillment_state: "failed", payment_state: "paid" })
     )
   ).toBe("checkout_fulfillment_failed_before_marker");
 });
 
 test("waits briefly for the provider session row to converge after redirect", async () => {
-  const completeRow = {
-    amount_value: 100,
-    currency: "EUR",
-    payment_attempt_id: "attempt-1",
-    provider_order_id: "provider-order-1",
-    provider_redirect_url: "https://provider.example/hosted",
-    reservation_id: "reservation-1",
-    security_token: "security-token",
-  } as CheckoutRow;
-  const rows: readonly (CheckoutRow | undefined)[] = [
-    undefined,
-    { reservation_id: "reservation-1" } as CheckoutRow,
-    completeRow,
-  ];
+  const incompleteRow = makeCheckoutRow();
+  const completeRow = makeHostedCheckoutRow();
+  const rows = [undefined, incompleteRow, completeRow];
   const observedRows: CheckoutRow[] = [];
   let reads = 0;
 
@@ -266,9 +254,9 @@ test("waits briefly for the provider session row to converge after redirect", as
     }).pipe(Effect.provide(TestClock.layer()))
   );
 
-  expect(result).toBe(completeRow);
+  expect(completeRow).toBe(result);
   expect(reads).toBe(3);
-  expect(observedRows).toEqual([rows[1], completeRow]);
+  expect(observedRows).toEqual([incompleteRow, completeRow]);
 });
 
 test("retains the last provider session diagnostic after convergence times out", async () => {
@@ -276,7 +264,7 @@ test("retains the last provider session diagnostic after convergence times out",
     Effect.gen(function* () {
       const waited = yield* Effect.forkChild(
         waitForProviderSessionRowAfterRedirect(
-          Effect.succeed({ reservation_id: "reservation-1" } as CheckoutRow),
+          Effect.succeed(makeCheckoutRow()),
           { intervalMs: 1, timeoutMs: 5 }
         )
       );
@@ -301,7 +289,7 @@ test("replays Nexi notification against the exact protected preview", async () =
     method: string | undefined;
     url: string;
   }> = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeWebhookHttpClient(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -314,21 +302,12 @@ test("replays Nexi notification against the exact protected preview", async () =
       return new Response(null, { status: 200 });
     }
   );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
-  );
-
   await Effect.runPromise(
-    replayPaymentWebhook(makeConfig(), makeCheckoutRow()).pipe(
+    replayPaymentWebhook(makeConfig(), makeWebhookCheckoutRow()).pipe(
       Effect.andThen(
         replayPaymentWebhook(
           { ...makeConfig(), paymentProvider: "fallback" },
-          makeCheckoutRow()
+          makeWebhookCheckoutRow()
         )
       ),
       Effect.provide(httpClientLayer)
@@ -360,42 +339,40 @@ test("replays Nexi notification against the exact protected preview", async () =
 });
 
 test.each([
-  ["nexi_webhook_fulfillment_failed", "nexi_webhook_fulfillment_failed"],
-  ["postgres_checkout_row_assertion_failed", undefined],
-  ["provider-payload-value", undefined],
+  [
+    "nexi_webhook_fulfillment_failed",
+    "nexi_webhook_fulfillment_failed",
+    "nexi_webhook_fulfillment_failed",
+  ],
+  [
+    "postgres_checkout_row_assertion_failed",
+    "postgres_checkout_row_assertion_failed",
+    undefined,
+  ],
+  ["provider-payload-value", "provider-payload-value", undefined],
+  ["a non-string code", 123, undefined],
 ] as const)(
   "keeps webhook failure diagnostics on the fixed allowlist for %s",
-  async (responseCode, expectedDiagnosticCode) => {
-    const fetchMock = mock(async () =>
+  async (_label, responseCode, expectedDiagnosticCode) => {
+    const httpClientLayer = makeWebhookHttpClient(async () =>
       Response.json(
         { code: responseCode, payload: "provider payload must stay private" },
         { status: 500 }
       )
     );
-    const httpClientLayer = FetchHttpClient.layer.pipe(
-      Layer.provide(
-        Layer.succeed(
-          FetchHttpClient.Fetch,
-          fetchMock as unknown as typeof globalThis.fetch
-        )
-      )
-    );
-
     const exit = await Effect.runPromiseExit(
-      replayPaymentWebhook(makeConfig(), makeCheckoutRow()).pipe(
+      replayPaymentWebhook(makeConfig(), makeWebhookCheckoutRow()).pipe(
         Effect.provide(httpClientLayer)
       )
     );
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isSuccess(exit)) return;
-    const error = Cause.squash(exit.cause);
+    const error = Option.getOrThrow(Cause.findErrorOption(exit.cause));
     expect(error).toMatchObject({
       message: "Nexi webhook replay failed with 500",
     });
-    expect(
-      (error as { readonly diagnosticCode?: unknown }).diagnosticCode
-    ).toBe(expectedDiagnosticCode);
+    expect(error.diagnosticCode).toBe(expectedDiagnosticCode);
     expect(JSON.stringify(error)).not.toContain(
       "provider payload must stay private"
     );
@@ -404,18 +381,15 @@ test.each([
 
 test("replays mock payment on the protected preview with a stable event ID", async () => {
   const requests: { request: Request; body: unknown }[] = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeWebhookHttpClient(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request = new Request(input, init);
       requests.push({ request, body: await request.json() });
       return new Response(null, { status: 200 });
     }
   );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
-  );
   const config = { ...makeConfig(), paymentProvider: "mock" } as const;
-  const row = { ...makeCheckoutRow(), provider: "mock" };
+  const row = makeWebhookCheckoutRow({ provider: "mock" });
 
   await Effect.runPromise(
     replayPaymentWebhook(config, row).pipe(
@@ -426,7 +400,7 @@ test("replays mock payment on the protected preview with a stable event ID", asy
     )
   );
   const rejectedReplay = await Effect.runPromiseExit(
-    replayPaymentWebhook(config, makeCheckoutRow()).pipe(
+    replayPaymentWebhook(config, makeWebhookCheckoutRow()).pipe(
       Effect.provide(httpClientLayer)
     )
   );
@@ -561,26 +535,138 @@ const makeDatasourceConfig = (
   dotypos: {
     apiTimeout: 1_000,
     apiUrl: "http://127.0.0.1:1",
-    branchId: "11111111",
-    clientId: "e2e-client",
+    branchId: DotyposBranchIdSchema.make("11111111"),
+    clientId: DotyposClientIdSchema.make("e2e-client"),
     clientSecret: "e2e-client-secret",
-    cloudId: "cloud-id",
-    employeeId: "22222222",
+    cloudId: DotyposCloudIdSchema.make("cloud-id"),
+    employeeId: DotyposEmployeeIdSchema.make("22222222"),
     refreshToken: "e2e-refresh-token",
   },
   expectedCurrency: "CZK",
+  fixtureCapacityTarget: {
+    baseUrl: makeConfig().baseUrl,
+    githubRunAttempt: undefined,
+    githubRunId: undefined,
+    targetSha: undefined,
+  },
   nexiApiOrigin: "https://xpaysandbox.nexigroup.com",
   timeouts: { ...workspaceE2ETimeouts, datasource: 2_000 },
 });
 
-const makeCheckoutRow = () =>
-  ({
+const makeWebhookHttpClient = (
+  respond: (...args: Parameters<typeof fetch>) => Promise<Response>
+) =>
+  FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(respond, { preconnect: () => undefined })
+      )
+    )
+  );
+
+const makeCheckoutRow = (
+  overrides: Partial<CheckoutRow> = {}
+): CheckoutRow => ({
+  reservation_id: reservationId,
+  checkout_session_key: checkoutSessionKeySchema.make("checkout-session-1"),
+  checkout_attempt_key: checkoutAttemptKeySchema.make("checkout-attempt-1"),
+  correlation_id: "correlation-1",
+  dotypos_customer_id: null,
+  dotypos_reservation_id: null,
+  reservation_state: "held",
+  payment_state: "pending",
+  fulfillment_state: "not_started",
+  active_payment_attempt_id: null,
+  reservation_details: null,
+  locale: "en-US",
+  reservation_created_at: null,
+  reservation_hold_expires_at: null,
+  reservation_confirmed_at: null,
+  reservation_cancelled_at: null,
+  reservation_hold_expired_at: null,
+  paid_at: null,
+  fulfilled_at: null,
+  fulfillment_failed_at: null,
+  failure_code: null,
+  fulfillment_failure_code: null,
+  payment_attempt_id: null,
+  provider: null,
+  provider_order_id: null,
+  security_token: null,
+  payment_attempt_state: null,
+  amount_value: null,
+  amount_exponent: null,
+  currency: null,
+  provider_redirect_url: null,
+  last_webhook_event_id: null,
+  last_provider_operation_id: null,
+  last_provider_status: null,
+  payment_failure_code: null,
+  webhook_id: null,
+  webhook_provider: null,
+  webhook_event_id: null,
+  webhook_provider_order_id: null,
+  webhook_processed_at: null,
+  webhook_state: null,
+  webhook_error_code: null,
+  ...overrides,
+});
+
+const makeHostedCheckoutRow = (overrides: Partial<CheckoutRow> = {}) => {
+  const paymentAttemptId = paymentAttemptIdSchema.make("attempt-1");
+  return makeCheckoutRow({
+    active_payment_attempt_id: paymentAttemptId,
     amount_value: 100,
+    amount_exponent: 2,
     currency: "EUR",
-    last_provider_operation_id: "provider-operation-1",
-    payment_attempt_id: "payment-attempt-1",
+    payment_attempt_id: paymentAttemptId,
     provider: "nexi",
     provider_order_id: "provider-order-1",
-    reservation_id: "reservation-1",
+    provider_redirect_url: "https://provider.example/hosted",
+    security_token: "security-token",
+    ...overrides,
+  });
+};
+
+const makeWebhookCheckoutRow = (overrides: Partial<CheckoutRow> = {}) => {
+  const paymentAttemptId = paymentAttemptIdSchema.make("payment-attempt-1");
+  return makeHostedCheckoutRow({
+    active_payment_attempt_id: paymentAttemptId,
+    last_provider_operation_id: "provider-operation-1",
+    payment_attempt_id: paymentAttemptId,
+    provider_redirect_url: null,
     security_token: "test-security-token",
-  }) as CheckoutRow;
+    ...overrides,
+  });
+};
+
+type LatePaymentRecoveryRow = typeof latePaymentRecoveries.$inferSelect;
+
+const makeLatePaymentRecovery = (
+  outcome: Pick<LatePaymentRecoveryRow, "state"> &
+    Partial<
+      Pick<
+        LatePaymentRecoveryRow,
+        "failureCode" | "recoveredDotyposReservationId"
+      >
+    >
+): LatePaymentRecoveryRow => {
+  const completedAt = Temporal.Instant.from("2099-07-24T12:00:00Z");
+  return {
+    paymentAttemptId: paymentAttemptIdSchema.make("attempt-1"),
+    workspaceReservationId: reservationId,
+    webhookEventId: null,
+    providerOperationId: null,
+    providerStatus: null,
+    originalDotyposReservationId: originalReservationId,
+    recoveredDotyposReservationId: null,
+    failureCode: null,
+    verifiedPaidAt: completedAt,
+    claimedAt: completedAt,
+    completedAt,
+    createdAt: completedAt,
+    updatedAt: completedAt,
+    ...outcome,
+  };
+};

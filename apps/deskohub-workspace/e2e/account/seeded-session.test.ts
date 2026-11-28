@@ -111,6 +111,7 @@ const unreachable = Effect.die("the failed insert reached the browser");
 /** A browser session the database-log test must never touch. */
 const unreachableBrowserSession: E2EBrowserSession = {
   activate: () => unreachable,
+  addCookies: () => unreachable,
   captureFailureArtifacts: () => unreachable,
   clearDiagnostics: () => unreachable,
   close: () => unreachable,

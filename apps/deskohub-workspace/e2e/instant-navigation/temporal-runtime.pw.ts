@@ -105,7 +105,7 @@ const forcedCases = [
   {
     name: "incomplete",
     removeTemporal: () => {
-      const partial = { ...(globalThis as { Temporal?: object }).Temporal };
+      const partial = { ...globalThis.Temporal };
       Reflect.deleteProperty(partial, "PlainYearMonth");
       Object.defineProperty(globalThis, "Temporal", {
         configurable: true,

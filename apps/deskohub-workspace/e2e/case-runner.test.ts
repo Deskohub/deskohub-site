@@ -144,9 +144,10 @@ describe("case outcomes", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      const failure = Cause.squash(exit.cause) as WorkspaceE2EError;
-      expect(failure.reason).toBe("timeout");
-      expect(failure.operation).toBe(`${caseId}/wait-for-provider`);
+      expect(Cause.squash(exit.cause)).toMatchObject({
+        operation: `${caseId}/wait-for-provider`,
+        reason: "timeout",
+      });
     }
     expect(observations).toContainEqual({
       caseId,
@@ -570,9 +571,10 @@ describe("step permits", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      const failure = Cause.squash(exit.cause) as WorkspaceE2EError;
-      expect(failure.reason).toBe("timeout");
-      expect(failure.operation).toBe(`${caseId}/replay-payment-webhook`);
+      expect(Cause.squash(exit.cause)).toMatchObject({
+        operation: `${caseId}/replay-payment-webhook`,
+        reason: "timeout",
+      });
     }
     expect(events).toEqual([
       "permit:wait@0",

@@ -5,6 +5,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { normalizeBrowserText, openPage, waitForPageText } from "../browser";
 import type {
+  BrowserPageFunction,
   E2EBrowserSession,
   OpenE2EBrowserSession,
 } from "../browser-session";
@@ -146,7 +147,7 @@ const assertPage = <Arg>({
   session,
 }: {
   readonly arg: Arg;
-  readonly check: (arg: Arg) => boolean;
+  readonly check: BrowserPageFunction<Arg, boolean>;
   readonly config: WorkspaceE2EConfig;
   readonly failure: string;
   readonly label: string;

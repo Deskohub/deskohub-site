@@ -4,10 +4,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, chromium } from "@playwright/test";
+import { Schema } from "effect";
 import { unzipSync } from "fflate";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { sanitizePlaywrightTraceFile } from "./playwright-trace-sanitizer";
 import { addRedaction } from "./redaction";
+
+const readTraceEvent = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ type: Schema.String }))
+);
 
 // Records a real Chromium trace that holds every kind of value the preview
 // runs put in one: an added cookie, a served cookie, credential headers, a
@@ -157,7 +162,7 @@ test.skipIf(!chromiumAvailable)(
         text
           .split("\n")
           .filter(Boolean)
-          .map((line) => (JSON.parse(line) as { type: string }).type)
+          .map((line) => readTraceEvent(line).type)
       );
     expect([...types(trace?.text)]).toEqual(
       expect.arrayContaining([

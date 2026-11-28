@@ -3,7 +3,7 @@ import {
   type DotyposReservationId,
   DotyposService,
 } from "@deskohub/dotypos";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Cause, Effect, Exit, Option, Tuple } from "effect";
 import { splitCustomerName } from "@/features/checkout/backend/reservation/dotypos-customer-policy";
 import { getWorkspaceE2EDateInterval } from "./capacity";
 import type { DatasourceConfig } from "./config";
@@ -193,9 +193,8 @@ export const prepareCheckoutFlowCleanup = (
           dependencies
             .readDotyposReservationOwner(datasourceConfig, reservationId)
             .pipe(
-              Effect.map(
-                (owner) =>
-                  [reservationId, Option.getOrUndefined(owner)] as const
+              Effect.map((owner) =>
+                Tuple.make(reservationId, Option.getOrUndefined(owner))
               )
             )
         ),
@@ -243,9 +242,11 @@ export const prepareCheckoutFlowCleanup = (
     return {
       checkoutRows: [
         ...new Map(
-          checkoutRows
-            .filter((row) => row.dotypos_reservation_id)
-            .map((row) => [row.dotypos_reservation_id, row] as const)
+          checkoutRows.flatMap((row) =>
+            row.dotypos_reservation_id
+              ? [Tuple.make(row.dotypos_reservation_id, row)]
+              : []
+          )
         ).values(),
       ],
       completedReservationIds,
@@ -466,7 +467,7 @@ const readCheckoutCleanupReservationOwner = Effect.fn(
     )
   );
   return Option.map(details, ({ customer }) => ({
-    customerId: customer.id as DotyposCustomerId | undefined,
+    customerId: customer.id,
     email: customer.email,
   }));
 });
@@ -501,13 +502,7 @@ export const readCheckoutCleanupCustomerIds = Effect.fn(
       toWorkspaceE2EError("read checkout cleanup customers", cause)
     )
   );
-  return [
-    ...new Set(
-      customers
-        .flat()
-        .flatMap(({ id }) => (id ? [id as DotyposCustomerId] : []))
-    ),
-  ];
+  return [...new Set(customers.flat().map(({ id }) => id))];
 });
 
 const liveCleanupDependencies: CleanupDependencies = {

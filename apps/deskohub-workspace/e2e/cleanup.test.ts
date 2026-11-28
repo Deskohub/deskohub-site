@@ -1,14 +1,27 @@
 import { expect, mock, test } from "bun:test";
-import { DotyposRejected } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposRejected,
+  type DotyposReservationId,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { workspaceReservationIdSchema } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
 import { Effect, Option } from "effect";
+import { hostedCheckoutRow } from "./cases/checkout.test-utils";
+import { unopenedE2EDatabase } from "./cases/e2e-fixtures.test-utils";
 import {
   cleanupCheckoutFlowStates,
   cleanupOwnedCheckoutFlowStates,
 } from "./cleanup";
-import type { DatasourceConfig } from "./config";
+import { type DatasourceConfig, getDatasourceConfig } from "./config";
+import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
+import { toWorkspaceE2EError, workspaceE2EError } from "./errors";
+import type { E2EDatabase } from "./integrations/database.service";
 import type { CheckoutData, CheckoutFlowState, CheckoutRow } from "./types";
 
+const datasourceConfig = getDatasourceConfig(makeTestE2EEnvironment());
+const dotyposCustomerId = DotyposCustomerIdSchema.make("dotypos-customer-1");
 const otherRunEmail = testEmailAddress("delivered+other-run");
 
 test("fallback cleanup cancels every matching reservation exactly once", async () => {
@@ -18,7 +31,9 @@ test("fallback cleanup cancels every matching reservation exactly once", async (
   const readCleanupCheckoutRows = mock(() =>
     Effect.succeed([firstRow, duplicateFirstRow, secondRow])
   );
-  const cancelDotyposReservation = mock(() => Effect.void);
+  const cancelDotyposReservation = mock(
+    (_config: DatasourceConfig, _id: DotyposReservationId) => Effect.void
+  );
   const data = checkoutData();
   const startedAt = new Date("2026-07-26T12:00:00.000Z");
   const flowStates: CheckoutFlowState[] = [
@@ -26,10 +41,10 @@ test("fallback cleanup cancels every matching reservation exactly once", async (
     { data, startedAt: new Date(startedAt.getTime() + 1_000) },
   ];
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates,
         workflowError: new Error("parallel sibling failed"),
       },
@@ -46,21 +61,21 @@ test("fallback cleanup cancels every matching reservation exactly once", async (
   expect(cleanupError).toBeUndefined();
   expect(readCleanupCheckoutRows).toHaveBeenCalledTimes(1);
   expect(cancelDotyposReservation.mock.calls.map(([, id]) => id)).toEqual([
-    "dotypos-reservation-1",
-    "dotypos-reservation-2",
+    DotyposReservationIdSchema.make("dotypos-reservation-1"),
+    DotyposReservationIdSchema.make("dotypos-reservation-2"),
   ]);
 });
 
 test("overlaps cleanup lookups and independent cancellations", async () => {
-  const lookupBarrier = makeBarrier<CheckoutRow | readonly CheckoutRow[]>(3);
-  const cancellationBarrier = makeBarrier<void>(3);
+  const lookupBarrier = makeBarrier(3);
+  const cancellationBarrier = makeBarrier(3);
   const data = checkoutData();
   const startedAt = new Date("2026-07-26T12:00:00.000Z");
   const flowStates: CheckoutFlowState[] = [
-    { data, orderId: "order-1", startedAt },
+    { data, orderId: workspaceReservationIdSchema.make("order-1"), startedAt },
     {
       data,
-      orderId: "order-2",
+      orderId: workspaceReservationIdSchema.make("order-2"),
       startedAt: new Date(startedAt.getTime() + 1_000),
     },
   ];
@@ -68,10 +83,10 @@ test("overlaps cleanup lookups and independent cancellations", async () => {
     cancellationBarrier.wait(undefined)
   );
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates,
         workflowError: undefined,
       },
@@ -102,33 +117,34 @@ test("overlaps cleanup lookups and independent cancellations", async () => {
 
 test("fails closed on lookup errors before checkout cancellation", async () => {
   const cancelDotyposReservation = mock(() =>
-    Effect.fail(new Error("cancellation failed"))
+    Effect.fail(workspaceE2EError("cancellation failed"))
   );
   const data = checkoutData();
   const startedAt = new Date("2026-07-26T12:00:00.000Z");
   const flowStates: CheckoutFlowState[] = [
     { checkoutRow: checkoutRow("dotypos-reservation-1"), data },
     { checkoutRow: checkoutRow("dotypos-reservation-2"), data },
-    { data, orderId: "order-1", startedAt },
+    { data, orderId: workspaceReservationIdSchema.make("order-1"), startedAt },
     {
       data,
-      orderId: "order-2",
+      orderId: workspaceReservationIdSchema.make("order-2"),
       startedAt: new Date(startedAt.getTime() + 1_000),
     },
   ];
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates,
         workflowError: new Error("workflow failed"),
       },
       {
         cancelDotyposReservation,
-        readCheckoutRow: () => Effect.fail(new Error("row lookup failed")),
+        readCheckoutRow: () =>
+          Effect.fail(workspaceE2EError("row lookup failed")),
         readCleanupCheckoutRows: () =>
-          Effect.fail(new Error("fallback lookup failed")),
+          Effect.fail(workspaceE2EError("fallback lookup failed")),
         readCleanupCustomerIds: () => Effect.succeed([]),
         readDotyposReservationOwner: ownerForCheckoutData(data),
       }
@@ -145,20 +161,22 @@ test("does not cancel order or fallback rows outside their journaled recipient",
     "dotypos-reservation-foreign",
     "journaled-order"
   );
-  const cancelDotyposReservation = mock((_config, id: string) => {
-    cancelledReservationIds.push(id);
-    return Effect.void;
-  });
+  const cancelDotyposReservation = mock(
+    (_config: DatasourceConfig, id: DotyposReservationId) => {
+      cancelledReservationIds.push(id);
+      return Effect.void;
+    }
+  );
   const exactOrderState: CheckoutFlowState = {
     data: checkoutData(),
-    orderId: "journaled-order" as CheckoutFlowState["orderId"],
+    orderId: workspaceReservationIdSchema.make("journaled-order"),
     startedAt: new Date("2026-07-26T12:00:00.000Z"),
   };
 
-  const exactCleanupError = await Effect.runPromise(
+  const exactCleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [exactOrderState],
         workflowError: undefined,
       },
@@ -170,8 +188,7 @@ test("does not cancel order or fallback rows outside their journaled recipient",
         readDotyposReservationOwner: () =>
           Effect.succeed(
             Option.some({
-              customerId:
-                "dotypos-customer-1" as CheckoutRow["dotypos_customer_id"],
+              customerId: dotyposCustomerId,
               email: otherRunEmail,
             })
           ),
@@ -184,10 +201,10 @@ test("does not cancel order or fallback rows outside their journaled recipient",
     data: { ...checkoutData(), locale: "cs-CZ" },
     startedAt: new Date("2026-07-26T12:00:00.000Z"),
   };
-  const fallbackCleanupError = await Effect.runPromise(
+  const fallbackCleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [fallbackState],
         workflowError: undefined,
       },
@@ -199,8 +216,7 @@ test("does not cancel order or fallback rows outside their journaled recipient",
         readDotyposReservationOwner: () =>
           Effect.succeed(
             Option.some({
-              customerId:
-                "dotypos-customer-1" as CheckoutRow["dotypos_customer_id"],
+              customerId: dotyposCustomerId,
               email: otherRunEmail,
             })
           ),
@@ -221,10 +237,10 @@ test("validates ownership of a captured reservation before checkout cancellation
     data: checkoutData(),
   };
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [state],
         workflowError: undefined,
       },
@@ -236,8 +252,7 @@ test("validates ownership of a captured reservation before checkout cancellation
         readDotyposReservationOwner: () =>
           Effect.succeed(
             Option.some({
-              customerId:
-                "dotypos-customer-1" as CheckoutRow["dotypos_customer_id"],
+              customerId: dotyposCustomerId,
               email: otherRunEmail,
             })
           ),
@@ -250,7 +265,6 @@ test("validates ownership of a captured reservation before checkout cancellation
 });
 
 test("treats only a missing reservation as already converged during cleanup", async () => {
-  const datasourceConfig = {} as DatasourceConfig;
   const state: CheckoutFlowState = {
     checkoutRow: checkoutRow("missing-reservation"),
     data: checkoutData(),
@@ -258,7 +272,7 @@ test("treats only a missing reservation as already converged during cleanup", as
   };
   const cancelDotyposReservation = mock(() => Effect.void);
   const waitForCancelledDotyposReservations = mock(() => Effect.void);
-  const missingReservationResult = await Effect.runPromise(
+  const missingReservationResult = await runCleanup(
     cleanupCheckoutFlowStates(
       {
         datasourceConfig,
@@ -292,7 +306,7 @@ test("treats only a missing reservation as already converged during cleanup", as
     request: "customer.get",
     reason: "not-found",
   });
-  const customerNotFoundResult = await Effect.runPromise(
+  const customerNotFoundResult = await runCleanup(
     cleanupCheckoutFlowStates(
       {
         datasourceConfig,
@@ -304,7 +318,13 @@ test("treats only a missing reservation as already converged during cleanup", as
         readCheckoutRow: () => Effect.succeed(undefined),
         readCleanupCheckoutRows: () => Effect.succeed([]),
         readCleanupCustomerIds: () => Effect.succeed([]),
-        readDotyposReservationOwner: () => Effect.fail(linkedCustomerMissing),
+        readDotyposReservationOwner: () =>
+          Effect.fail(
+            toWorkspaceE2EError(
+              "read checkout cleanup reservation owner",
+              linkedCustomerMissing
+            )
+          ),
         waitForCancelledDotyposReservations,
       }
     )
@@ -316,7 +336,7 @@ test("treats only a missing reservation as already converged during cleanup", as
 });
 
 test("case-owned cleanup uses only captured IDs and exact-order lookups", async () => {
-  const cancellationBarrier = makeBarrier<void>(3);
+  const cancellationBarrier = makeBarrier(3);
   const capturedState: CheckoutFlowState = {
     checkoutRow: checkoutRow("dotypos-reservation-1"),
     data: checkoutData(),
@@ -324,7 +344,7 @@ test("case-owned cleanup uses only captured IDs and exact-order lookups", async 
   };
   const exactOrderState: CheckoutFlowState = {
     data: checkoutData(),
-    orderId: "order-2",
+    orderId: workspaceReservationIdSchema.make("order-2"),
     startedAt: new Date("2026-07-26T12:00:01.000Z"),
   };
   const secondCapturedState: CheckoutFlowState = {
@@ -340,10 +360,10 @@ test("case-owned cleanup uses only captured IDs and exact-order lookups", async 
     Effect.succeed(checkoutRow("dotypos-reservation-2"))
   );
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupOwnedCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [
           capturedState,
           exactOrderState,
@@ -364,7 +384,7 @@ test("case-owned cleanup uses only captured IDs and exact-order lookups", async 
   expect(cancellationBarrier.maximumActive()).toBe(3);
   expect(capturedState.cleanupComplete).toBe(true);
   expect(capturedState.completedDotyposReservationId).toBe(
-    "dotypos-reservation-1"
+    DotyposReservationIdSchema.make("dotypos-reservation-1")
   );
   expect(exactOrderState.cleanupComplete).toBe(true);
   expect(secondCapturedState.cleanupComplete).toBe(true);
@@ -374,17 +394,19 @@ test("case-owned cleanup uses only captured IDs and exact-order lookups", async 
 test("does not cancel a journaled case reservation twice", async () => {
   const state: CheckoutFlowState = {
     cleanupComplete: true,
-    completedDotyposReservationId: "dotypos-reservation-1",
+    completedDotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-1"
+    ),
     data: checkoutData(),
     startedAt: new Date("2026-07-26T12:00:00.000Z"),
   };
   const cancelDotyposReservation = mock(() => Effect.void);
   const waitForCancelledDotyposReservations = mock(() => Effect.void);
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [state],
         workflowError: undefined,
       },
@@ -411,16 +433,16 @@ test("case-owned cleanup leaves failed cancellations for suite reconciliation", 
     data: checkoutData(),
   };
 
-  const cleanupError = await Effect.runPromise(
+  const cleanupError = await runCleanup(
     cleanupOwnedCheckoutFlowStates(
       {
-        datasourceConfig: {} as DatasourceConfig,
+        datasourceConfig,
         flowStates: [state],
         workflowError: undefined,
       },
       {
         cancelDotyposReservation: () =>
-          Effect.fail(new Error("cancellation failed")),
+          Effect.fail(workspaceE2EError("cancellation failed")),
         readCheckoutRow: () => Effect.succeed(undefined),
       }
     )
@@ -430,43 +452,41 @@ test("case-owned cleanup leaves failed cancellations for suite reconciliation", 
   expect(state.cleanupComplete).toBeUndefined();
 });
 
-const checkoutData = () =>
-  ({
-    date: "2026-08-04",
-    email: testEmailAddress("delivered+synthetic-checkout"),
-    expectedReservationDetails: {
-      kind: "cowork",
-      entryTier: "basic",
-      coffee: false,
-    },
-    locale: "en-US",
-  }) as CheckoutData;
+const runCleanup = <A>(effect: Effect.Effect<A, never, E2EDatabase>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(unopenedE2EDatabase)));
 
-const checkoutRow = (dotyposReservationId: string, reservationId = "order-1") =>
-  ({
-    reservation_id: reservationId,
-    dotypos_customer_id: "dotypos-customer-1" as NonNullable<
-      CheckoutRow["dotypos_customer_id"]
-    >,
-    dotypos_reservation_id: dotyposReservationId,
-  }) as CheckoutRow;
+const checkoutData = (): CheckoutData => ({
+  checkoutUrl: "https://workspace.example.test/checkout",
+  date: "2026-08-04",
+  email: testEmailAddress("delivered+synthetic-checkout"),
+  expectedReservationDetails: {
+    kind: "cowork",
+    entryTier: "basic",
+    coffee: false,
+  },
+  locale: "en-US",
+  name: "Workspace E2E checkout cleanup",
+  orderIdHint: "cleanup-checkout",
+  phone: "+15555550100",
+});
 
-const ownerForCheckoutData =
-  (data: CheckoutData) =>
-  (
-    _config: DatasourceConfig,
-    _reservationId: CheckoutRow["dotypos_reservation_id"]
-  ) =>
-    Effect.succeed(
-      Option.some({
-        customerId: "dotypos-customer-1" as NonNullable<
-          CheckoutRow["dotypos_customer_id"]
-        >,
-        email: data.email,
-      })
-    );
+const checkoutRow = (
+  dotyposReservationId: string,
+  reservationId = "order-1"
+): CheckoutRow =>
+  hostedCheckoutRow("cleanup-attempt", "cleanup-provider-order", "nexi", {
+    reservation_id: workspaceReservationIdSchema.make(reservationId),
+    dotypos_customer_id: dotyposCustomerId,
+    dotypos_reservation_id:
+      DotyposReservationIdSchema.make(dotyposReservationId),
+  });
 
-const makeBarrier = <A>(expectedParticipants: number) => {
+const ownerForCheckoutData = (data: CheckoutData) => () =>
+  Effect.succeed(
+    Option.some({ customerId: dotyposCustomerId, email: data.email })
+  );
+
+const makeBarrier = (expectedParticipants: number) => {
   let active = 0;
   let maximumActive = 0;
   let started = 0;
@@ -477,7 +497,7 @@ const makeBarrier = <A>(expectedParticipants: number) => {
 
   return {
     maximumActive: () => maximumActive,
-    wait: (value: A) =>
+    wait: <A>(value: A) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
           active += 1;
