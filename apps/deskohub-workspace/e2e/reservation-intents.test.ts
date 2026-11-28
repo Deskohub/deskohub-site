@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { resendSimulatorAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import { createSyntheticReservation } from "./account/fixtures";
@@ -162,7 +163,7 @@ test("an invalid email cannot be admitted through a second customer ID", async (
     await writeReservationJournal(journalPath, { laneId: "account-lane" });
     const owner = {
       customerId: "synthetic-owner",
-      email: "not-a-synthetic-recipient@example.test",
+      email: resendSimulatorAddress("delivered", "dual-owner-intent"),
     };
     const exit = await Effect.runPromiseExit(
       recordReservationIntent({
