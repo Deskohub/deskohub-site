@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import { moneyMajorAmount } from "@/shared/money/money";
 import { escapeRegExp } from "@/shared/utils/escape-regexp";
@@ -48,22 +49,31 @@ export type AgentEvalStatusPageCheck = {
   readonly confirmed: boolean;
 };
 
-export type AgentEvalJudgementReason =
-  | "matched"
-  | "missing-facts"
-  | "no-reservation"
-  | "reservation-cancelled"
-  | "wrong-product"
-  | "wrong-date"
-  | "wrong-time"
-  | "wrong-seats"
-  | "wrong-duration"
-  | "paid-without-permission"
-  | "not-paid"
-  | "status-not-reached"
-  | "status-not-confirmed";
+export const agentEvalJudgementReasonSchema = Schema.Literals([
+  "matched",
+  "missing-facts",
+  "no-reservation",
+  "reservation-cancelled",
+  "wrong-product",
+  "wrong-date",
+  "wrong-time",
+  "wrong-seats",
+  "wrong-duration",
+  "paid-without-permission",
+  "not-paid",
+  "status-not-reached",
+  "status-not-confirmed",
+]);
 
-export type AgentEvalFact = "price" | "opening-hours" | "address";
+type AgentEvalJudgementReason = typeof agentEvalJudgementReasonSchema.Type;
+
+export const agentEvalFactSchema = Schema.Literals([
+  "price",
+  "opening-hours",
+  "address",
+]);
+
+type AgentEvalFact = typeof agentEvalFactSchema.Type;
 
 export type AgentEvalJudgement = {
   readonly success: boolean;
@@ -294,13 +304,17 @@ export type AgentEvalFailureCategory =
   (typeof agentEvalFailureCategories)[number];
 
 /** How the harness process ended. */
+export const agentEvalHarnessOutcomeSchema = Schema.Literals([
+  "completed",
+  "agent-error",
+  "timeout",
+  "exit",
+  "invalid-response",
+  "spawn-failure",
+]);
+
 export type AgentEvalHarnessOutcomeKind =
-  | "completed"
-  | "agent-error"
-  | "timeout"
-  | "exit"
-  | "invalid-response"
-  | "spawn-failure";
+  typeof agentEvalHarnessOutcomeSchema.Type;
 
 const reservationRouteByTask = {
   "meeting-room-to-pay": "reservation-meeting-room",

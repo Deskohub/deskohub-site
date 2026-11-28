@@ -1,18 +1,22 @@
+import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import type { BrowserContext, Page } from "@playwright/test";
-import { locales } from "@/features/i18n";
+import { Schema } from "effect";
 
 /** Where a top-level page was, by route family; never the full URL. */
-export type AgentEvalRoute =
-  | "reservation-cowork"
-  | "reservation-meeting-room"
-  | "reservation-office"
-  | "pay"
-  | "sign-in"
-  | "account"
-  | "status"
-  | "payment-provider"
-  | "site"
-  | "external";
+export const agentEvalRouteSchema = Schema.Literals([
+  "reservation-cowork",
+  "reservation-meeting-room",
+  "reservation-office",
+  "pay",
+  "sign-in",
+  "account",
+  "status",
+  "payment-provider",
+  "site",
+  "external",
+]);
+
+export type AgentEvalRoute = typeof agentEvalRouteSchema.Type;
 
 export type AgentEvalUrlOrigins = {
   readonly siteOrigin: string;
@@ -20,7 +24,7 @@ export type AgentEvalUrlOrigins = {
   readonly paymentProviderHost: string;
 };
 
-const localePrefix = new RegExp(`^/(?:${locales.join("|")})(?=/|$)`);
+const localePrefix = new RegExp(`^/(?:${supportedLocales.join("|")})(?=/|$)`);
 
 const siteRoutes: readonly (readonly [RegExp, AgentEvalRoute])[] = [
   [/^\/reservation\/cowork(?:\/|$)/, "reservation-cowork"],
@@ -50,22 +54,20 @@ export const classifyAgentEvalUrl = (
   return siteRoutes.find(([pattern]) => pattern.test(path))?.[1] ?? "site";
 };
 
-/**
- * What the browser showed during one run, measured from the task start. The
- * payment page facts are the evidence for the new-tab versus same-tab
- * payment handoff decision.
- */
+export const agentEvalPaymentPageSchema = Schema.Struct({
+  openedAfterMs: Schema.Finite,
+  /** Opened in a tab other than the one the run started in. */
+  inNewTab: Schema.Boolean,
+  /** The agent clicked or typed on the payment page. */
+  actedIn: Schema.Boolean,
+});
+
+/** What the browser showed during one run, measured from the task start. */
 export type AgentEvalBrowserObservations = {
   /** Route families in first-visit order. */
   readonly routes: readonly AgentEvalRoute[];
   readonly timeToPayUrlMs: number | null;
-  readonly paymentPage: {
-    readonly openedAfterMs: number;
-    /** Opened in a tab other than the one the run started in. */
-    readonly inNewTab: boolean;
-    /** The agent clicked or typed on the payment page. */
-    readonly actedIn: boolean;
-  } | null;
+  readonly paymentPage: typeof agentEvalPaymentPageSchema.Type | null;
   /** The last status page URL the agent reached; not persisted in results. */
   readonly statusPageUrl: string | null;
   readonly tabCount: number;

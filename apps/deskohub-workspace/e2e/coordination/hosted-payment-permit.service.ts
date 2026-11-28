@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { Context, Effect, Layer, Schedule } from "effect";
+import { Context, Effect, Layer, Option, Schedule, Schema } from "effect";
 import {
   toWorkspaceE2EError,
   type WorkspaceE2EError,
@@ -110,12 +110,17 @@ type Ticket = {
   readonly token: string;
 };
 
-type TicketOwner = {
-  readonly pid: number;
+const ticketOwnerSchema = Schema.Struct({
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
   // Process start time in clock ticks since boot, where procfs provides it.
-  readonly startTime?: string;
-  readonly token: string;
-};
+  startTime: Schema.optionalKey(Schema.String),
+  token: Schema.String,
+});
+type TicketOwner = typeof ticketOwnerSchema.Type;
+
+const decodeTicketOwner = Schema.decodeOption(
+  Schema.fromJsonString(ticketOwnerSchema)
+);
 
 // Tokens of the tickets this process still owns. A ticket naming this process
 // whose token is missing was leaked by an earlier holder, so it is inactive.
@@ -207,9 +212,13 @@ function makeHostedPaymentPermit(
         }
         let owner = owners.get(number);
         if (!owner) {
-          owner = JSON.parse(
-            await readFile(ticketPath(directory, number), "utf8")
-          ) as TicketOwner;
+          owner = Option.getOrThrowWith(
+            decodeTicketOwner(
+              await readFile(ticketPath(directory, number), "utf8")
+            ),
+            () =>
+              workspaceE2EError("Invalid hosted payment permit ticket owner")
+          );
           owners.set(number, owner);
         }
         const active =

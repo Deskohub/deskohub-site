@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import type { Page } from "@playwright/test";
 import { m } from "@/features/i18n";
 import {
   dismissLegalCookieConsent,
@@ -14,23 +13,10 @@ const necessaryOnlyLabel = m.cookieConsentConsentModalAcceptNecessaryBtn(
   { locale }
 );
 
-type FakeLocator = {
-  readonly _apiName: string;
-  readonly _expect: (
-    expression: string,
-    options: Record<string, unknown>
-  ) => Promise<{
-    readonly matches: boolean;
-    readonly received: { readonly value: boolean };
-  }>;
-  readonly click: (options?: { readonly timeout?: number }) => Promise<void>;
-  readonly isVisible: () => Promise<boolean>;
-};
-
 type FakeConsentPage = {
   readonly clickCount: () => number;
   readonly evaluateArguments: readonly string[];
-  readonly page: Page;
+  readonly page: Parameters<typeof dismissLegalCookieConsent>[0];
 };
 
 const makeFakeConsentPage = (input: {
@@ -45,29 +31,22 @@ const makeFakeConsentPage = (input: {
   const getNecessaryVisibility = () => necessaryVisible;
   const getAnalyticsVisibility = () => input.analyticsVisible;
 
-  const makeLocator = (isVisible: () => boolean): FakeLocator => ({
-    _apiName: "Locator",
-    _expect: async (expression) => {
-      if (expression !== "to.be.hidden")
-        throw new Error(`unexpected fake locator assertion: ${expression}`);
-      const visible = isVisible();
-      return {
-        matches: !visible,
-        received: { value: !visible },
-      };
-    },
+  const makeLocator = (isVisible: () => boolean) => ({
     click: async () => {
       if (!isVisible()) throw new Error("fake cookie consent target is hidden");
       clickCount += 1;
       necessaryVisible = false;
     },
     isVisible: async () => isVisible(),
+    waitFor: async () => {
+      if (isVisible()) throw new Error("fake cookie consent target is visible");
+    },
   });
 
   const necessaryOnlyButton = makeLocator(getNecessaryVisibility);
   const analyticsCheckbox = makeLocator(getAnalyticsVisibility);
-  const page = Object.assign({} as Page, {
-    evaluate: async (_pageFunction: unknown, selector: string) => {
+  const page: FakeConsentPage["page"] = {
+    evaluate: async (_pageFunction, selector) => {
       evaluateArguments.push(selector);
       const result =
         input.hydrationResults[
@@ -76,17 +55,17 @@ const makeFakeConsentPage = (input: {
       evaluateIndex += 1;
       return result ?? false;
     },
-    getByRole: (_role: string, options: { readonly name?: string }) => {
-      if (options.name !== necessaryOnlyLabel)
+    getByRole: (_role, options) => {
+      if (options?.name !== necessaryOnlyLabel)
         throw new Error("fake cookie consent helper used the wrong locale");
       return necessaryOnlyButton;
     },
-    locator: (selector: string) => {
+    locator: (selector) => {
       if (selector !== analyticsCheckboxSelector)
         throw new Error(`unexpected fake cookie consent selector: ${selector}`);
       return analyticsCheckbox;
     },
-  });
+  };
 
   return {
     clickCount: () => clickCount,
@@ -115,14 +94,15 @@ test("detects the hydrated React click handler on the consent control", async ()
   GlobalRegistrator.register({ url: "https://workspace.example.test/" });
   try {
     document.body.innerHTML = `<input id="cookie-category-analytics" type="checkbox" />`;
-    const checkbox = document.querySelector(analyticsCheckboxSelector)!;
+    const checkbox = document.querySelector(analyticsCheckboxSelector);
+    if (!checkbox) throw new Error("Analytics checkbox is missing.");
 
     expect(hasReactClickHandler(analyticsCheckboxSelector)).toBe(false);
     // React stores the current props on the element under a random suffix.
-    const reactProps = { onChange: (): void => undefined } as {
+    const reactProps: {
       onChange: () => void;
       onClick?: () => void;
-    };
+    } = { onChange: () => {} };
     Object.assign(checkbox, { __reactProps$test: reactProps });
     expect(hasReactClickHandler(analyticsCheckboxSelector)).toBe(false);
     reactProps.onClick = () => undefined;

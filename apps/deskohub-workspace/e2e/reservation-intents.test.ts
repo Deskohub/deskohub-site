@@ -62,12 +62,14 @@ test("the real account fixture persists each far-future intent before POST and e
           [caseId]
         );
         expect(intents).toHaveLength(creates + 1);
-        expect(Date.parse(intents[creates]!.startDate)).toBeGreaterThan(
+        const currentIntent = intents[creates];
+        if (!currentIntent) throw new Error("Missing creation intent");
+        expect(Date.parse(currentIntent.startDate)).toBeGreaterThan(
           Date.now() + 100 * 86400000
         );
         expect(
-          Date.parse(intents[creates]!.endDate) -
-            Date.parse(intents[creates]!.startDate)
+          Date.parse(currentIntent.endDate) -
+            Date.parse(currentIntent.startDate)
         ).toBe(7200000);
         if (creates === 1)
           expect(intents[0]?.reservationId).toBe("reservation-1");
@@ -79,8 +81,8 @@ test("the real account fixture persists each far-future intent before POST and e
             _branchId: "branch",
             _customerId: "synthetic-account-owner",
             status: "CONFIRMED",
-            startDate: intents[creates - 1]!.startDate,
-            endDate: intents[creates - 1]!.endDate,
+            startDate: currentIntent.startDate,
+            endDate: currentIntent.endDate,
             seats: "1",
           },
         ]);
@@ -148,6 +150,36 @@ test("missing journal and unregistered case refuse admission before any create",
       )
     );
     expect(exit._tag).toBe("Failure");
+  }
+});
+
+test("an invalid email cannot be admitted through a second customer ID", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dual-owner-intent-"));
+  const journalPath = join(directory, "account-lane.json");
+  const caseId = "account-reservation-transitions";
+  const context = makeE2ERunContext(makeTestE2EEnvironment());
+  try {
+    await writeReservationJournal(journalPath, { laneId: "account-lane" });
+    const owner = {
+      customerId: "synthetic-owner",
+      email: "not-a-synthetic-recipient@example.test",
+    };
+    const exit = await Effect.runPromiseExit(
+      recordReservationIntent({
+        owner,
+        startDate: new Date("2027-01-01"),
+        endDate: new Date("2027-01-02"),
+      }).pipe(
+        Effect.provideService(E2ERunContextService, { value: context }),
+        Effect.provideService(CurrentReservationCase, { caseId, journalPath })
+      )
+    );
+    expect(exit._tag).toBe("Failure");
+    expect(
+      (await readReservationJournal(journalPath))?.reservationIntents
+    ).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

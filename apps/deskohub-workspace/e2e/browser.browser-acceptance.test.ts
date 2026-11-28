@@ -237,11 +237,10 @@ const openProtectedPage = async (probeStatus: number) => {
       Effect.gen(function* () {
         const session = yield* E2EBrowserSession.open({
           browser: opened,
-          fetch: (async (input: string | URL | Request) => {
-            const url = new URL(input instanceof Request ? input.url : input);
+          fetch: async (url) => {
             events.push(`probe ${url.origin}`);
             return new Response(null, { status: probeStatus });
-          }) as typeof fetch,
+          },
           id: `browser-open-${randomUUID()}`,
           recordHar: false,
         });

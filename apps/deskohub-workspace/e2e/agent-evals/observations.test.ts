@@ -17,7 +17,7 @@ describe("classifyAgentEvalUrl", () => {
     ["/cs-CZ/account", "account"],
     ["/en-US", "site"],
     ["/en-US/checkout/pay/return/order-1", "site"],
-  ])("classifies %s on the preview as %s", (path, route) => {
+  ] as const)("classifies %s on the preview as %s", (path, route) => {
     expect(classifyAgentEvalUrl(`${origins.siteOrigin}${path}`, origins)).toBe(
       route
     );

@@ -84,33 +84,41 @@ export const runE2ECase = <R, RC = never, RF = never>(input: {
     let terminalStepId: string | undefined;
     let bodyDurationMs = 0;
 
-    const step: WorkspaceE2EStepRunner = <
+    function step<
       A,
       R,
       P extends WorkspaceE2EStepPermit | undefined = undefined,
-    >({
+    >(
+      input: WorkspaceE2EStep<A, R, P>
+    ): Effect.Effect<
+      A,
+      WorkspaceE2EError,
+      R | WorkspaceE2EStepPermitRequirement<P>
+    >;
+    function step<A, R>({
       execute,
       id,
       permit,
       timeoutMs,
-    }: WorkspaceE2EStep<A, R, P>) => {
+    }: WorkspaceE2EStep<
+      A,
+      R,
+      WorkspaceE2EStepPermit | undefined
+    >): Effect.Effect<
+      A,
+      WorkspaceE2EError,
+      R | WorkspaceE2EProviderVerificationPermitService
+    > {
       const operation = `${caseId}/${id}`;
       const timed = withinWorkspaceE2EDeadline(execute, operation, timeoutMs);
-      // The permit's service requirement is exactly what the runner's
-      // conditional type adds for `P`; TypeScript can't narrow `P` here.
-      const admitted = (
+      const admitted =
         permit === "provider-verification"
           ? Effect.gen(function* () {
               const providerVerification =
                 yield* WorkspaceE2EProviderVerificationPermitService;
               return yield* providerVerification.withPermit(timed);
             })
-          : timed
-      ) as Effect.Effect<
-        A,
-        WorkspaceE2EError,
-        R | WorkspaceE2EStepPermitRequirement<P>
-      >;
+          : timed;
 
       return telemetry.traceStep({
         caseId,
@@ -135,7 +143,7 @@ export const runE2ECase = <R, RC = never, RF = never>(input: {
         stepId: id,
         timeoutMs,
       });
-    };
+    }
 
     const watched = Effect.suspend(() => {
       const startedAt = Date.now();

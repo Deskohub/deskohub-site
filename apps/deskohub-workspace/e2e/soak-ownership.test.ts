@@ -74,7 +74,8 @@ test("the actual ownership reader requires complete case, owner, run and pre-cre
     await write("account-journals/account-lane.json", accountJournal);
     const booker = workspaceE2ECheckoutJournalOwners.find(
       (owner) => owner.caseId === caseId
-    )!;
+    );
+    if (!booker) throw new Error("Missing configured journal owner");
     for (const ownerId of [booker.ownerId, "referral-share-link-checkout"]) {
       await rm(join(directory, `account-journals/${ownerId}.json`));
       await rejected();

@@ -41,7 +41,8 @@ export const readRunOwnedReservationRows = Effect.fn(
       )
   );
   if (customerIds.length === 0 && accountIds.length === 0) {
-    return [] as readonly OwnedReservationRow[];
+    const rows: readonly OwnedReservationRow[] = [];
+    return rows;
   }
   return yield* runRetrySafeDatabaseOperation(
     "read all run-owned reservation rows",

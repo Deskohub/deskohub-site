@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { testEmailAddress } from "@deskohub/test-email";
 import {
   type ReservationIntent,
   readReservationJournal,
@@ -25,6 +26,7 @@ test("each account-pair intent survives fixture/finalizer rewrites and serialize
   try {
     await writeReservationJournal(path, {
       completed: false,
+      historicalFixture: { ownerId: "synthetic-owner" },
       laneId: "account-lane",
     });
     await Promise.all([
@@ -51,6 +53,7 @@ test("each account-pair intent survives fixture/finalizer rewrites and serialize
       "returned-first"
     );
     expect(value?.completed).toBe(true);
+    expect(value?.historicalFixture).toEqual({ ownerId: "synthetic-owner" });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(await readFile(path, "utf8")).not.toContain("undefined");
   } finally {
@@ -69,6 +72,7 @@ test("unknown owner/case/run/interval and missing pre-create coverage are reject
     undefined,
     null,
     [{ ...intent("x"), owner: {} }],
+    [{ ...intent("x"), owner: { customerId: "synthetic-owner", email: "" } }],
     [{ ...intent("x"), caseId: "unregistered" }],
     [{ ...intent("x"), runId: "other" }],
     [{ ...intent("x"), endDate: "invalid" }],
@@ -76,6 +80,17 @@ test("unknown owner/case/run/interval and missing pre-create coverage are reject
     expect(() => parse(value)).toThrow();
   }
   expect(parse([intent("valid")])).toHaveLength(1);
+  expect(
+    parse([
+      { ...intent("valid"), orderId: undefined, reservationId: undefined },
+    ])
+  ).toHaveLength(1);
+  const email = testEmailAddress("journal-owner");
+  expect(
+    parse([
+      { ...intent("valid"), owner: { customerId: "historical-owner", email } },
+    ])
+  ).toEqual([{ ...intent("valid"), owner: { email } }]);
 });
 
 test("malformed persisted intent identities cannot be overwritten", async () => {

@@ -33,7 +33,7 @@ test("omits diagnostic codes outside the fixed code-owned allowlist", () => {
   expect(
     formatWorkspaceE2EFailureAnnotation({
       caseId: "checkout-calendar-sale",
-      diagnosticCode: "provider-response-secret" as never,
+      diagnosticCode: "provider-response-secret",
       failureKind: "error",
       outcome: "failed",
     })

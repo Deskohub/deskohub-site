@@ -47,7 +47,7 @@ const lint = async (
   }
 };
 
-test("anti-slop allows independent assertions in Workspace E2E", async () => {
+test("strict assertion rule rejects independent assertions without reporting a chain in Workspace E2E", async () => {
   const result = await lint(
     `
 declare const input: unknown;
@@ -61,7 +61,10 @@ void parenthesizedResult;
     "probe.test.ts"
   );
 
-  expect(result.exitCode).toBe(0);
+  const output = `${result.stdout}${result.stderr}`;
+  expect(result.exitCode).not.toBe(0);
+  expect(output).toContain("[anti-slop/no-type-assertions]");
+  expect(output).not.toContain("[anti-slop/no-chained-type-assertions]");
 });
 
 test("anti-slop allows parsed unknown values in Workspace scripts", async () => {

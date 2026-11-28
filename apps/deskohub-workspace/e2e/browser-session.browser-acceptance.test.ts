@@ -5,16 +5,20 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, type BrowserContext, chromium } from "@playwright/test";
-import { Effect, Exit, Fiber, Scheduler, Scope } from "effect";
+import { Effect, Exit, Fiber, Scheduler, Schema, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import { E2EBrowserSession } from "./browser-session";
+import {
+  type BrowserContextOpener,
+  E2EBrowserSession,
+} from "./browser-session";
 import {
   formatWorkspaceE2EFailure,
   isWorkspaceE2ETimeout,
   type WorkspaceE2EError,
   workspaceE2EError,
 } from "./errors";
+import type { PreviewAccessFetch } from "./preview-access";
 import { addRedaction } from "./redaction";
 import { workspaceE2ETimeouts } from "./timeouts";
 
@@ -98,6 +102,11 @@ const origin = () => {
   return `http://localhost:${server.port}`;
 };
 
+const realBrowser = () => {
+  if (!browser) throw new Error("Chromium is not running");
+  return browser;
+};
+
 const openSession = (options: { readonly recordHar?: boolean } = {}) => {
   if (!browser) throw new Error("Chromium is not running");
   return E2EBrowserSession.open({
@@ -126,28 +135,42 @@ const rawHarFiles = async (id: string) =>
 test.skipIf(!chromiumAvailable)(
   "opens one context per session and closes it with the scope",
   async () => {
-    if (!browser) throw new Error("Chromium is not running");
+    const opened = realBrowser();
     const id = `session-lifecycle-${randomUUID()}`;
-    const before = browser.contexts().length;
+    const before = opened.contexts().length;
     const during = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const session = yield* E2EBrowserSession.open({
-            browser: browser as Browser,
+            browser: opened,
             id,
           });
           yield* goto(session, "/");
-          return { contexts: browser?.contexts().length };
+          return { contexts: opened.contexts().length };
         })
       )
     );
 
     expect(during.contexts).toBe(before + 1);
-    expect(browser.contexts().length).toBe(before);
+    expect(opened.contexts().length).toBe(before);
     // Playwright writes the raw HAR when the context closes; the scope then
     // deletes it.
     expect(await rawHarFiles(id)).toEqual([]);
   }
+);
+
+const readHar = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      log: Schema.Struct({
+        entries: Schema.Array(
+          Schema.Struct({
+            request: Schema.Struct({ url: Schema.String }),
+          })
+        ),
+      }),
+    })
+  )
 );
 
 test.skipIf(!chromiumAvailable)(
@@ -167,11 +190,7 @@ test.skipIf(!chromiumAvailable)(
     );
 
     const har = await readFile(harPath, "utf8");
-    const entries = (
-      JSON.parse(har) as {
-        log: { entries: { request: { url: string } }[] };
-      }
-    ).log.entries;
+    const { entries } = readHar(har).log;
     expect(
       entries.some(({ request }) => request.url.startsWith(`${origin()}/?`))
     ).toBe(true);
@@ -193,7 +212,7 @@ test.skipIf(!chromiumAvailable)(
       Effect.scoped(
         Effect.gen(function* () {
           const session = yield* E2EBrowserSession.open({
-            browser: browser as Browser,
+            browser: realBrowser(),
             id,
           });
           yield* session.use("open the noisy page", async (page) => {
@@ -283,14 +302,14 @@ test.skipIf(!chromiumAvailable)(
 test.skipIf(!chromiumAvailable)(
   "removes the raw HAR when the export fails and settles every close once",
   async () => {
-    if (!browser) throw new Error("Chromium is not running");
+    const opened = realBrowser();
     const id = `session-export-${randomUUID()}`;
     const harPath = join(artifactDir, `${id}.har`);
     const outcome = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const session = yield* E2EBrowserSession.open({
-            browser: browser as Browser,
+            browser: opened,
             id,
           });
           yield* goto(session, "/");
@@ -424,12 +443,11 @@ test.skipIf(!chromiumAvailable)(
 const deploymentOrigin =
   "https://deskohub-workspace-abc123def-synthetic.vercel.app";
 
-const toLocalServer = ((input: string | URL | Request, init?: RequestInit) => {
-  const url = new URL(input instanceof Request ? input.url : input);
+const toLocalServer: PreviewAccessFetch = (url, init) => {
   if (url.origin !== deploymentOrigin)
     throw new Error("The probe left the deployment origin");
   return fetch(new URL(`${url.pathname}${url.search}`, origin()), init);
-}) as typeof fetch;
+};
 
 const withPreviewSession = <A>(
   body: (session: E2EBrowserSession) => Effect.Effect<A, WorkspaceE2EError>
@@ -709,7 +727,7 @@ const openerBrowser = (
       }
       return context;
     },
-  } as unknown as Browser;
+  } satisfies BrowserContextOpener;
   return {
     browser: counting,
     contexts,
@@ -915,13 +933,13 @@ const stallingContextClose = (options: { readonly failNewPage: boolean }) => {
   const realBrowser = browser;
   const closeRequested = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
-  const contexts: BrowserContext[] = [];
+  const closeContexts: BrowserContext["close"][] = [];
   const stalling = {
     newContext: async (
       contextOptions?: Parameters<Browser["newContext"]>[0]
     ) => {
       const context = await realBrowser.newContext(contextOptions);
-      contexts.push(context);
+      closeContexts.push(context.close.bind(context));
       context.close = () => {
         closeRequested.resolve();
         return held.promise;
@@ -931,20 +949,12 @@ const stallingContextClose = (options: { readonly failNewPage: boolean }) => {
           Promise.reject(new Error("synthetic page failure"));
       return context;
     },
-  } as unknown as Browser;
+  } satisfies BrowserContextOpener;
   return {
     browser: stalling,
     closeRequested: closeRequested.promise,
     release: async () => {
-      await Promise.all(
-        contexts.map((context) =>
-          Reflect.apply(
-            Object.getPrototypeOf(context).close as BrowserContext["close"],
-            context,
-            []
-          )
-        )
-      );
+      await Promise.all(closeContexts.map((close) => close()));
       held.resolve();
     },
   };

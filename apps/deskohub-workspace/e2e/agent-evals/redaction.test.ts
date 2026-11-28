@@ -73,8 +73,10 @@ describe("redactAgentEvalValue", () => {
     for (const sentinel of [reservationId, orderId, "access="]) {
       expect(text).not.toContain(sentinel);
     }
-    expect(redacted.parameters).toEqual(judgeInput.parameters);
-    expect(redacted.records[0]).toMatchObject({ paid: true, seats: 1 });
-    expect(redacted.statusPage).toBeNull();
+    expect(redacted).toMatchObject({
+      parameters: judgeInput.parameters,
+      records: [{ paid: true, seats: 1 }],
+      statusPage: null,
+    });
   });
 });

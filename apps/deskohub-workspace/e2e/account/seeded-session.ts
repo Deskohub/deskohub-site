@@ -240,7 +240,7 @@ export const signInWorkspaceE2ESyntheticBrowserSession = ({
   readonly accountId: string;
   readonly origin: string;
   readonly secret: WorkspaceE2ESessionSigningSecret;
-  readonly session: E2EBrowserSession;
+  readonly session: Pick<E2EBrowserSession, "addCookies">;
 }): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
     const cookie = workspaceE2ESessionCookieFor(origin);
@@ -249,11 +249,9 @@ export const signInWorkspaceE2ESyntheticBrowserSession = ({
       secret,
     });
     yield* session
-      .use(syntheticSessionCookieOperation, (page) =>
-        page
-          .context()
-          .addCookies([toSyntheticSessionCookie(cookie, origin, value)])
-      )
+      .addCookies(syntheticSessionCookieOperation, [
+        toSyntheticSessionCookie(cookie, origin, value),
+      ])
       .pipe(Effect.mapError(syntheticSessionCookieFailure));
   });
 

@@ -10,10 +10,14 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Option } from "effect";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
-import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
+import {
+  type ReservationFixtureInput,
+  workspaceFixtures,
+} from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { cleanupCheckoutFlowStates } from "./cleanup";
-import type { DatasourceConfig } from "./config";
+import { type DatasourceConfig, getDatasourceConfig } from "./config";
+import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import {
   readCheckoutRow,
   readCleanupCheckoutRows,
@@ -22,11 +26,15 @@ import { E2EDatabase } from "./integrations/database.service";
 import type { CheckoutData, CheckoutFlowState } from "./types";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const datasourceConfig = getDatasourceConfig(makeTestE2EEnvironment());
 const run = crypto.randomUUID();
 
 // Each flow expects the identity its writer records, so cleanup must select
 // the enriched rows by containment.
-const families = [
+const families: readonly {
+  readonly expected: CheckoutData["expectedReservationDetails"];
+  readonly stored: StoredWorkspaceReservationDetails;
+}[] = [
   {
     expected: { kind: "meeting-room", duration: { unit: "day", amount: 1 } },
     stored: { kind: "meeting-room", duration: { unit: "day", amount: 1 } },
@@ -35,10 +43,7 @@ const families = [
     expected: { kind: "office", seats: 4, dayCount: 2 },
     stored: { kind: "office", seats: 4, dayCount: 2 },
   },
-] as const satisfies readonly {
-  readonly expected: StoredWorkspaceReservationDetails;
-  readonly stored: StoredWorkspaceReservationDetails;
-}[];
+];
 
 const customerId = (owner: string, kind: string): DotyposCustomerId =>
   DotyposCustomerIdSchema.make(`cleanup-${owner}-${kind}-${run}`);
@@ -53,16 +58,23 @@ describe.skipIf(!testDatabase)(
 
     test("cancels only this run's enriched fallback rows when another run's rows match", async () => {
       const startedAt = new Date(Date.now() - 1_000);
-      const flowStates: CheckoutFlowState[] = families.map(({ expected }) => ({
-        data: {
-          date: "2026-08-04",
-          email: testEmailAddress(`delivered+cleanup-${expected.kind}-${run}`),
-          expectedReservationDetails: expected,
-          locale: "en-US",
-          name: `Workspace E2E cleanup ${expected.kind}`,
-        } as CheckoutData,
-        startedAt,
-      }));
+      const flowStates = families.map(
+        ({ expected }): CheckoutFlowState => ({
+          data: {
+            checkoutUrl: "https://workspace.example.test/checkout",
+            date: "2026-08-04",
+            email: testEmailAddress(
+              `delivered+cleanup-${expected.kind}-${run}`
+            ),
+            expectedReservationDetails: expected,
+            locale: "en-US",
+            name: `Workspace E2E cleanup ${expected.kind}`,
+            orderIdHint: `cleanup-${expected.kind}`,
+            phone: "+15555550100",
+          },
+          startedAt,
+        })
+      );
       const ownedEmails = new Map(
         flowStates.map(({ data }) => [
           reservationId("owned", data.expectedReservationDetails.kind),
@@ -73,15 +85,17 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         workspaceFixtures(db).reservations(
           families.flatMap(({ stored }) =>
-            ["owned", "foreign"].map((owner) => ({
-              stage: { reservation: "held", payment: "pending" } as const,
-              customer: customerId(owner, stored.kind),
-              details: stored,
-              overrides: {
-                dotyposReservationId: reservationId(owner, stored.kind),
-                reservationCreatedAt: Temporal.Now.instant(),
-              },
-            }))
+            ["owned", "foreign"].map(
+              (owner): ReservationFixtureInput => ({
+                stage: { reservation: "held", payment: "pending" },
+                customer: customerId(owner, stored.kind),
+                details: stored,
+                overrides: {
+                  dotyposReservationId: reservationId(owner, stored.kind),
+                  reservationCreatedAt: Temporal.Now.instant(),
+                },
+              })
+            )
           )
         )
       );
@@ -93,7 +107,7 @@ describe.skipIf(!testDatabase)(
       const cleanupError = await Effect.runPromise(
         cleanupCheckoutFlowStates(
           {
-            datasourceConfig: {} as DatasourceConfig,
+            datasourceConfig,
             flowStates,
             workflowError: undefined,
           },

@@ -1,15 +1,22 @@
+import { supportedLocales } from "@deskohub/i18n/locale-registry";
+import { decodeStandardSchema } from "@deskohub/standard-schema";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { Schema } from "effect";
 import type { Locale } from "@/features/i18n";
-import type { AgentEvalPerception } from "./harness-contract";
+import { agentEvalPerceptionSchema } from "./harness-contract";
 import {
-  type AgentEvalFact,
   type AgentEvalFailureCategory,
-  type AgentEvalHarnessOutcomeKind,
-  type AgentEvalJudgementReason,
+  agentEvalFactSchema,
   agentEvalFailureCategories,
+  agentEvalHarnessOutcomeSchema,
+  agentEvalJudgementReasonSchema,
 } from "./judges";
-import type { AgentEvalBrowserObservations } from "./observations";
+import {
+  agentEvalPaymentPageSchema,
+  agentEvalRouteSchema,
+} from "./observations";
 import type { AgentEvalTarget } from "./target";
-import type { AgentEvalTaskId } from "./tasks";
+import { type AgentEvalTaskId, agentEvalTaskIds } from "./tasks";
 
 /** The ticket's floor: each task, harness, and locale runs at least 5 times. */
 export const agentEvalMinimumRunsPerCell = 5;
@@ -18,30 +25,48 @@ export const agentEvalMinimumRunsPerCell = 5;
  * One run's result file. It holds no transcript and no personal data: the
  * account is synthetic and the final answer is truncated.
  */
-export type AgentEvalRunResult = {
-  readonly version: 1;
-  readonly runSetId: string;
-  readonly taskId: AgentEvalTaskId;
-  readonly harnessId: string;
-  readonly perception: AgentEvalPerception;
-  readonly locale: Locale;
-  readonly repeat: number;
-  readonly startedAt: string;
-  readonly success: boolean;
-  readonly reason: AgentEvalJudgementReason;
-  /** Facts the answer missed; facts task only. */
-  readonly missingFacts: readonly AgentEvalFact[] | null;
-  readonly failureCategory: AgentEvalFailureCategory | null;
-  readonly harnessOutcome: AgentEvalHarnessOutcomeKind;
-  readonly harnessError: string | null;
-  readonly finalAnswer: string | null;
-  readonly steps: number | null;
-  readonly costUsd: number | null;
-  readonly wallTimeMs: number;
-  readonly timeToPayUrlMs: number | null;
-  readonly paymentPage: AgentEvalBrowserObservations["paymentPage"];
-  readonly routes: AgentEvalBrowserObservations["routes"];
-  readonly tabCount: number;
+const agentEvalRunResultSchema = Schema.toStandardSchemaV1(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      runSetId: Schema.String,
+      taskId: Schema.Literals(agentEvalTaskIds),
+      harnessId: Schema.String,
+      perception: agentEvalPerceptionSchema,
+      locale: Schema.Literals(supportedLocales),
+      repeat: Schema.Finite,
+      startedAt: Schema.String,
+      success: Schema.Boolean,
+      reason: agentEvalJudgementReasonSchema,
+      /** Facts the answer missed; facts task only. */
+      missingFacts: Schema.NullOr(Schema.Array(agentEvalFactSchema)),
+      failureCategory: Schema.NullOr(
+        Schema.Literals(agentEvalFailureCategories)
+      ),
+      harnessOutcome: agentEvalHarnessOutcomeSchema,
+      harnessError: Schema.NullOr(Schema.String),
+      finalAnswer: Schema.NullOr(Schema.String),
+      steps: Schema.NullOr(Schema.Finite),
+      costUsd: Schema.NullOr(Schema.Finite),
+      wallTimeMs: Schema.Finite,
+      timeToPayUrlMs: Schema.NullOr(Schema.Finite),
+      paymentPage: Schema.NullOr(agentEvalPaymentPageSchema),
+      routes: Schema.Array(agentEvalRouteSchema),
+      tabCount: Schema.Finite,
+    })
+  )
+);
+
+export type AgentEvalRunResult = StandardSchemaV1.InferOutput<
+  typeof agentEvalRunResultSchema
+>;
+
+export const parseAgentEvalRunResult = (
+  serialized: string
+): AgentEvalRunResult => {
+  const result = decodeStandardSchema(agentEvalRunResultSchema, serialized);
+  if (!result) throw new Error("The agent eval run result is invalid");
+  return result;
 };
 
 type FailureCounts = Readonly<Record<AgentEvalFailureCategory, number>>;
@@ -93,13 +118,22 @@ const median = (values: readonly number[]): number | null => {
     : ((sorted[middle - 1] ?? 0) + upper) / 2;
 };
 
-const countFailures = (results: readonly AgentEvalRunResult[]): FailureCounts =>
-  Object.fromEntries(
-    agentEvalFailureCategories.map((category) => [
-      category,
-      results.filter((result) => result.failureCategory === category).length,
-    ])
-  ) as Record<AgentEvalFailureCategory, number>;
+const countFailures = (
+  results: readonly AgentEvalRunResult[]
+): FailureCounts => {
+  const failures: Record<AgentEvalFailureCategory, number> = {
+    navigation: 0,
+    "form-control": 0,
+    "date-picker": 0,
+    "sign-in": 0,
+    "payment-tab": 0,
+    other: 0,
+  };
+  for (const { failureCategory } of results) {
+    if (failureCategory !== null) failures[failureCategory] += 1;
+  }
+  return failures;
+};
 
 const definedNumbers = (values: readonly (number | null)[]) =>
   values.filter((value): value is number => value !== null);
@@ -117,30 +151,33 @@ export const summarizeAgentEvalResults = (
       [result.taskId, result.harnessId, result.locale].join("\u0000")
     ).values(),
   ]
-    .map((group): AgentEvalSummaryCell => {
-      const [first] = group as [AgentEvalRunResult, ...AgentEvalRunResult[]];
+    .flatMap((group): AgentEvalSummaryCell[] => {
+      const [first] = group;
+      if (!first) return [];
       const successes = group.filter((result) => result.success).length;
       const costs = definedNumbers(group.map((result) => result.costUsd));
-      return {
-        costUsd:
-          costs.length === 0
-            ? null
-            : costs.reduce((total, cost) => total + cost, 0),
-        failures: countFailures(group),
-        harnessId: first.harnessId,
-        locale: first.locale,
-        medianSteps: median(
-          definedNumbers(group.map((result) => result.steps))
-        ),
-        medianTimeToPayUrlMs: median(
-          definedNumbers(group.map((result) => result.timeToPayUrlMs))
-        ),
-        medianWallTimeMs: median(group.map((result) => result.wallTimeMs)),
-        runs: group.length,
-        successRate: successes / group.length,
-        successes,
-        taskId: first.taskId,
-      };
+      return [
+        {
+          costUsd:
+            costs.length === 0
+              ? null
+              : costs.reduce((total, cost) => total + cost, 0),
+          failures: countFailures(group),
+          harnessId: first.harnessId,
+          locale: first.locale,
+          medianSteps: median(
+            definedNumbers(group.map((result) => result.steps))
+          ),
+          medianTimeToPayUrlMs: median(
+            definedNumbers(group.map((result) => result.timeToPayUrlMs))
+          ),
+          medianWallTimeMs: median(group.map((result) => result.wallTimeMs)),
+          runs: group.length,
+          successRate: successes / group.length,
+          successes,
+          taskId: first.taskId,
+        },
+      ];
     })
     .sort(
       (left, right) =>

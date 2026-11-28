@@ -7,6 +7,7 @@ import {
   type VersionNegotiationMode,
 } from "@modelcontextprotocol/client";
 import { type BrowserContext, expect, test } from "@playwright/test";
+import { Schema } from "effect";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { enablePreviewAccess } from "../preview-access";
 import { workspaceE2ETimeouts } from "../timeouts";
@@ -14,29 +15,35 @@ import { requireBaseUrl } from "./navigation-test-helpers";
 
 const toolNames = ["list_offerings", "check_availability", "get_quote"];
 
-type McpOffering = {
-  family?: string;
-  tier?: string;
-  reservation_url?: string;
-};
+const decodeOfferings = Schema.decodeUnknownSync(
+  Schema.Struct({
+    business: Schema.Struct({ opening_hours: Schema.String }),
+    offerings: Schema.Array(
+      Schema.Struct({
+        family: Schema.optionalKey(Schema.String),
+        tier: Schema.optionalKey(Schema.String),
+        reservation_url: Schema.String,
+      })
+    ),
+  })
+);
 
-type McpOfferingsContent = {
-  business?: { opening_hours?: string };
-  offerings?: McpOffering[];
-};
+const decodeAvailability = Schema.decodeUnknownSync(
+  Schema.Struct({
+    family: Schema.String,
+    available: Schema.Boolean,
+    days: Schema.Array(Schema.Struct({ date: Schema.String })),
+    reservation_url: Schema.String,
+  })
+);
 
-type McpAvailabilityContent = {
-  family?: string;
-  available?: boolean;
-  days?: { date?: string; available?: boolean }[];
-  reservation_url?: string;
-};
-
-type McpQuoteContent = {
-  family?: string;
-  total?: { amount?: number; currency?: string };
-  reservation_url?: string;
-};
+const decodeQuote = Schema.decodeUnknownSync(
+  Schema.Struct({
+    family: Schema.String,
+    total: Schema.Struct({ amount: Schema.Finite, currency: Schema.String }),
+    reservation_url: Schema.String,
+  })
+);
 
 /**
  * Sends the SDK client's requests through the Playwright context, so they
@@ -152,12 +159,10 @@ for (const { versionNegotiation, sendsOwnOrigin } of [
             { name: "list_offerings", arguments: { locale: "en-US" } },
             requestOptions
           );
-          const content = result.structuredContent as
-            | McpOfferingsContent
-            | undefined;
-          const offerings = content?.offerings ?? [];
-
           expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+          const { business, offerings } = decodeOfferings(
+            result.structuredContent
+          );
           expect(offerings).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
@@ -167,16 +172,12 @@ for (const { versionNegotiation, sendsOwnOrigin } of [
             ])
           );
           expect(
-            offerings.every(
-              (offering) =>
-                typeof offering.reservation_url === "string" &&
-                offering.reservation_url.startsWith(previewOrigin)
+            offerings.every((offering) =>
+              offering.reservation_url.startsWith(previewOrigin)
             )
           ).toBe(true);
 
-          const openingHours = content?.business?.opening_hours;
-          expect(typeof openingHours).toBe("string");
-          expect(openingHours?.trim().length ?? 0).toBeGreaterThan(0);
+          expect(business.opening_hours.trim().length).toBeGreaterThan(0);
         },
         { timeout: workspaceE2ETimeouts.customerMcpRequest }
       );
@@ -191,19 +192,14 @@ for (const { versionNegotiation, sendsOwnOrigin } of [
             { name: "check_availability", arguments: selection },
             requestOptions
           );
-          const content = result.structuredContent as
-            | McpAvailabilityContent
-            | undefined;
-
           expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+          const content = decodeAvailability(result.structuredContent);
           expect(content).toMatchObject({
             family: "cowork",
             available: expect.any(Boolean),
             days: [expect.objectContaining({ date })],
           });
-          expect(content?.reservation_url?.startsWith(previewOrigin)).toBe(
-            true
-          );
+          expect(content.reservation_url.startsWith(previewOrigin)).toBe(true);
         },
         { timeout: workspaceE2ETimeouts.customerMcpRequest }
       );
@@ -215,19 +211,14 @@ for (const { versionNegotiation, sendsOwnOrigin } of [
             { name: "get_quote", arguments: selection },
             requestOptions
           );
-          const content = result.structuredContent as
-            | McpQuoteContent
-            | undefined;
-
           expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+          const content = decodeQuote(result.structuredContent);
           expect(content).toMatchObject({
             family: "cowork",
             total: { amount: expect.any(Number), currency: "CZK" },
           });
-          expect(content?.total?.amount ?? 0).toBeGreaterThan(0);
-          expect(content?.reservation_url?.startsWith(previewOrigin)).toBe(
-            true
-          );
+          expect(content.total.amount).toBeGreaterThan(0);
+          expect(content.reservation_url.startsWith(previewOrigin)).toBe(true);
         },
         { timeout: workspaceE2ETimeouts.customerMcpRequest }
       );

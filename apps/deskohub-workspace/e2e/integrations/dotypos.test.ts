@@ -327,8 +327,8 @@ test("Dotypos service logs and request spans stay out of E2E output", async () =
         logLines.push(Logger.formatLogFmt.log(options));
       });
       const tracer = Tracer.make({
-        span: (options) => ({
-          _tag: "Span" as const,
+        span: (options): Tracer.Span => ({
+          _tag: "Span",
           name: options.name,
           spanId: "test-span-id",
           traceId: "test-trace-id",
@@ -338,7 +338,7 @@ test("Dotypos service logs and request spans stay out of E2E output", async () =
           links: options.links,
           sampled: true,
           kind: options.kind,
-          status: { _tag: "Started", startTime: 0n } as Tracer.SpanStatus,
+          status: { _tag: "Started", startTime: 0n },
           end: () => {},
           attribute: (_key, value) => {
             spanValues.push(String(value));

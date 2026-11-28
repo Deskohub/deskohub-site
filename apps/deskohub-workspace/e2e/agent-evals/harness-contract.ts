@@ -11,18 +11,16 @@ import type { AgentEvalTaskId } from "./tasks";
  * How a harness perceives the page. Recorded with every run so results can be
  * compared across perception modes, not only across products.
  */
-const agentEvalPerceptions = [
+export const agentEvalPerceptionSchema = Schema.Literals([
   "accessibility-tree",
   "hybrid",
   "screenshot",
-] as const;
-
-export type AgentEvalPerception = (typeof agentEvalPerceptions)[number];
+]);
 
 const agentEvalHarnessSchema = Schema.Struct({
   /** Stable slug used in test titles, result files, and the results table. */
   id: Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)),
-  perception: Schema.Literals(agentEvalPerceptions),
+  perception: agentEvalPerceptionSchema,
   /**
    * Executable and arguments, spawned without a shell. Relative paths resolve
    * against the directory of the harness list file.

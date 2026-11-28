@@ -1,22 +1,25 @@
 // Child process for hosted-payment-permit.service.test.ts: holds the permit
 // from a separate process the way a Playwright worker does.
 import { appendFile } from "node:fs/promises";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { runUntracedE2EEffect } from "../effect-edge";
 import { WorkspaceE2EHostedPaymentPermitService } from "./hosted-payment-permit.service";
 
-type HolderInput = {
-  readonly capacity: number;
-  readonly crashWhileHolding?: boolean;
-  readonly directory: string;
-  readonly holdMs: number;
-  readonly label: string;
-  readonly logPath: string;
-  readonly sessions: number;
-};
+const holderInputSchema = Schema.Struct({
+  capacity: Schema.Finite,
+  crashWhileHolding: Schema.optionalKey(Schema.Boolean),
+  directory: Schema.String,
+  holdMs: Schema.Finite,
+  label: Schema.String,
+  logPath: Schema.String,
+  sessions: Schema.Finite,
+});
 
-const input = JSON.parse(process.argv[2] ?? "{}") as HolderInput;
+const input = Schema.decodeUnknownSync(
+  Schema.fromJsonString(holderInputSchema)
+)(process.argv[2]);
 
-const record = (event: string) =>
+const record = (event: "start" | "end") =>
   Effect.promise(() =>
     appendFile(
       input.logPath,
@@ -24,7 +27,7 @@ const record = (event: string) =>
     )
   );
 
-await Effect.runPromise(
+await runUntracedE2EEffect(
   Effect.gen(function* () {
     const permit = yield* WorkspaceE2EHostedPaymentPermitService;
     for (let session = 0; session < input.sessions; session += 1) {

@@ -119,6 +119,16 @@ const readGeometry = async (page: Page): Promise<ShellGeometry> =>
     };
   });
 
+declare global {
+  interface Window {
+    __deskohubAccountContinuity?: {
+      readonly siteHeader: HTMLElement;
+      readonly header: HTMLElement;
+      readonly navigation: HTMLElement;
+    };
+  }
+}
+
 const captureShellReferences = async (page: Page) =>
   page.evaluate(() => {
     const siteHeader = document.querySelector("body > header");
@@ -134,14 +144,7 @@ const captureShellReferences = async (page: Page) =>
       );
     }
 
-    const browserWindow = window as Window & {
-      __deskohubAccountContinuity?: {
-        readonly siteHeader: HTMLElement;
-        readonly header: HTMLElement;
-        readonly navigation: HTMLElement;
-      };
-    };
-    browserWindow.__deskohubAccountContinuity = {
+    window.__deskohubAccountContinuity = {
       header,
       navigation,
       siteHeader,
@@ -152,14 +155,7 @@ const inspectShellContinuity = async (
   page: Page
 ): Promise<ContinuityObservation> =>
   page.evaluate(() => {
-    const browserWindow = window as Window & {
-      __deskohubAccountContinuity?: {
-        readonly siteHeader: HTMLElement;
-        readonly header: HTMLElement;
-        readonly navigation: HTMLElement;
-      };
-    };
-    const stored = browserWindow.__deskohubAccountContinuity;
+    const stored = window.__deskohubAccountContinuity;
     const currentSiteHeader = document.querySelector("body > header");
     const currentHeader = document.querySelector("main > div > header");
     const currentNavigation = document.querySelector("main aside > nav");
@@ -402,7 +398,10 @@ const assertAccountNavigationControls = async (
     } else {
       expect(
         await buttons.evaluateAll((elements) =>
-          elements.every((element) => (element as HTMLButtonElement).disabled)
+          elements.every(
+            (element) =>
+              element instanceof HTMLButtonElement && element.disabled
+          )
         )
       ).toBe(true);
     }
@@ -885,7 +884,10 @@ const assertAnonymousLegalRoute = async (
         expect(await buttons.count()).toBe(2);
         expect(
           await buttons.evaluateAll((elements) =>
-            elements.every((element) => (element as HTMLButtonElement).disabled)
+            elements.every(
+              (element) =>
+                element instanceof HTMLButtonElement && element.disabled
+            )
           )
         ).toBe(true);
       }
