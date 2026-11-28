@@ -93,6 +93,29 @@ test("unknown owner/case/run/interval and missing pre-create coverage are reject
   ).toEqual([{ ...intent("valid"), owner: { email } }]);
 });
 
+test("preserves ID-only historical intents when adding an intent", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "historical-intent-"));
+  const path = join(directory, "account-lane.json");
+  try {
+    const historical = { id: "historical", retained: { synthetic: true } };
+    await writeFile(
+      path,
+      JSON.stringify({ reservationIntents: [historical] }),
+      {
+        mode: 0o600,
+      }
+    );
+    const next = intent("next");
+    await writeReservationJournal(path, {}, next);
+    expect((await readReservationJournal(path))?.reservationIntents).toEqual([
+      historical,
+      next,
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("malformed persisted intent identities cannot be overwritten", async () => {
   const directory = await mkdtemp(join(tmpdir(), "reservation-intent-"));
   const path = join(directory, "account-lane.json");
