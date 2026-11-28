@@ -103,7 +103,8 @@ const checkedState = (checked: boolean) => (checked ? "true" : "false");
  * signed in, or after a banner save in the tab.
  */
 const recordsDeviceConsent =
-  (occasion: "hydration" | "banner_save") => (request: Request) =>
+  (occasion: "hydration" | "banner_save") =>
+  (request: Pick<Request, "method" | "headers" | "postData">) =>
     request.method() === "POST" &&
     request.headers()["next-action"] !== undefined &&
     (request.postData() ?? "").includes(`"occasion":"${occasion}"`);
@@ -166,12 +167,36 @@ class SessionReadRateLimited extends Data.TaggedError(
 /** Better Auth's default rate limit window, for a 429 without its delay. */
 const sessionReadRateLimitWindow = Duration.seconds(10);
 
-const isRateLimitedSessionRead = (response: Response) =>
+type MirrorRequest = Pick<Request, "method" | "headers" | "postData"> & {
+  readonly response: () => Promise<unknown>;
+};
+type MirrorResponse = Pick<Response, "status" | "url" | "headers"> & {
+  readonly request: () => MirrorRequest;
+};
+type MirrorRequestListener = (request: MirrorRequest) => void;
+type MirrorReloadPage = {
+  readonly off: (event: "request", listener: MirrorRequestListener) => unknown;
+  readonly on: (event: "request", listener: MirrorRequestListener) => unknown;
+  readonly reload: (options: Parameters<Page["reload"]>[0]) => Promise<unknown>;
+  readonly waitForResponse: (
+    predicate: (response: MirrorResponse) => boolean,
+    options: { readonly timeout: number }
+  ) => Promise<MirrorResponse>;
+};
+type MirrorReloadDevice = {
+  readonly use: <A>(
+    label: string,
+    drive: (page: MirrorReloadPage) => Promise<A>,
+    options: { readonly timeoutMs: number }
+  ) => Effect.Effect<A, WorkspaceE2EError>;
+};
+
+const isRateLimitedSessionRead = (response: MirrorResponse) =>
   response.status() === 429 &&
   new URL(response.url()).pathname === "/api/auth/get-session";
 
 /** The delay Better Auth's `X-Retry-After` header asks for, in seconds. */
-const retryAfterOf = (response: Response) => {
+const retryAfterOf = (response: MirrorResponse) => {
   const seconds = Number(response.headers()["x-retry-after"]);
   return Number.isFinite(seconds) && seconds >= 0
     ? Duration.seconds(seconds)
@@ -188,10 +213,10 @@ const retryAfterOf = (response: Response) => {
  * mirror request has no Playwright timeout of its own, so the caller bounds
  * the whole callback through the session deadline.
  */
-const reloadUntilMirrored = async (page: Page) => {
+const reloadUntilMirrored = async (page: MirrorReloadPage) => {
   const timeout = workspaceE2ETimeouts.browserNavigation;
-  let mirror: Request | undefined;
-  const noteMirror = (request: Request) => {
+  let mirror: MirrorRequest | undefined;
+  const noteMirror = (request: MirrorRequest) => {
     if (recordsDeviceConsent("hydration")(request)) mirror ??= request;
   };
   page.on("request", noteMirror);
@@ -232,43 +257,42 @@ const waitForAccountPreference = async (page: Page) => {
  * at most twice; each reload, including the wait for a mirror request already
  * sent, is bounded by one navigation. Exported for its colocated test.
  */
-export const reloadDeviceUntilMirrored = (device: E2EBrowserSession) =>
-  driveDevice(
-    device,
-    "sign in analytics preference device",
-    (page) => reloadUntilMirrored(page),
-    { timeoutMs: workspaceE2ETimeouts.browserNavigation }
-  ).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.void,
-        onSome: (retryAfter) =>
-          Effect.fail(new SessionReadRateLimited({ retryAfter })),
-      })
-    ),
-    Effect.retry({
-      schedule: Schedule.recurs(2).pipe(
-        Schedule.setInputType<SessionReadRateLimited | WorkspaceE2EError>(),
-        Schedule.passthrough,
-        Schedule.modifyDelay(({ output: failure }) =>
-          Effect.succeed(
-            failure._tag === "SessionReadRateLimited"
-              ? failure.retryAfter
-              : Duration.zero
+export const reloadDeviceUntilMirrored = (device: MirrorReloadDevice) =>
+  device
+    .use("sign in analytics preference device", reloadUntilMirrored, {
+      timeoutMs: workspaceE2ETimeouts.browserNavigation,
+    })
+    .pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (retryAfter) =>
+            Effect.fail(new SessionReadRateLimited({ retryAfter })),
+        })
+      ),
+      Effect.retry({
+        schedule: Schedule.recurs(2).pipe(
+          Schedule.setInputType<SessionReadRateLimited | WorkspaceE2EError>(),
+          Schedule.passthrough,
+          Schedule.modifyDelay(({ output: failure }) =>
+            Effect.succeed(
+              failure._tag === "SessionReadRateLimited"
+                ? failure.retryAfter
+                : Duration.zero
+            )
+          )
+        ),
+        while: (failure) => failure._tag === "SessionReadRateLimited",
+      }),
+      Effect.catchTag("SessionReadRateLimited", () =>
+        Effect.fail(
+          workspaceE2EError(
+            "The device's session read stayed rate limited after signing in",
+            { operation: "sign in analytics preference device" }
           )
         )
-      ),
-      while: (failure) => failure._tag === "SessionReadRateLimited",
-    }),
-    Effect.catchTag("SessionReadRateLimited", () =>
-      Effect.fail(
-        workspaceE2EError(
-          "The device's session read stayed rate limited after signing in",
-          { operation: "sign in analytics preference device" }
-        )
       )
-    )
-  );
+    );
 
 /**
  * Signs the device's page in by reloading it until the mirror's hydration

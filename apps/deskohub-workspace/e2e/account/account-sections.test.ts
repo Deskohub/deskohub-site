@@ -9,7 +9,7 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import {
-  type AccountSectionPage,
+  type AccountSectionNavigationPage,
   accountSectionLandmarks,
   selectAccountSection,
 } from "./account-sections";
@@ -129,17 +129,6 @@ function AccountShellHarness({
   );
 }
 
-type FakeLocator = {
-  readonly click: (options?: { readonly timeout?: number }) => Promise<void>;
-  readonly elementHandle: () => Promise<FakeElementHandle>;
-  readonly isVisible: () => Promise<boolean>;
-};
-
-type FakeElementHandle = {
-  readonly dispose: () => Promise<void>;
-  readonly element: Element;
-};
-
 const desktopBreakpoint = 768;
 
 const elementIsVisible = (element: Element, width: number | null): boolean => {
@@ -164,69 +153,46 @@ const elementIsVisible = (element: Element, width: number | null): boolean => {
   return true;
 };
 
-const fakeLocator = (element: Element, width: number | null): FakeLocator => ({
+const fakeLocator = (element: Element, width: number | null) => ({
   click: async () => {
     if (!elementIsVisible(element, width))
       throw new Error("fake target is hidden");
     fireEvent.click(element);
   },
-  elementHandle: async () => ({
-    dispose: async () => {},
-    element,
-  }),
-  isVisible: async () => elementIsVisible(element, width),
+  waitForHandler: async () => {
+    const key = Object.keys(element).find((part) =>
+      part.startsWith("__reactProps$")
+    );
+    const props: unknown =
+      key === undefined ? undefined : Reflect.get(element, key);
+    if (
+      typeof props !== "object" ||
+      props === null ||
+      !("onClick" in props) ||
+      typeof props.onClick !== "function"
+    ) {
+      throw new Error("fake link was not hydrated");
+    }
+  },
 });
 
-const makeFakePage = (width: number | null): AccountSectionPage => {
-  const page = Object.assign({} as AccountSectionPage, {
-    getByRole: (role: string, roleOptions?: unknown) => {
-      const name =
-        typeof roleOptions === "object" &&
-        roleOptions !== null &&
-        "name" in roleOptions
-          ? String((roleOptions as { readonly name?: unknown }).name)
-          : "";
-      const exact =
-        typeof roleOptions === "object" &&
-        roleOptions !== null &&
-        "exact" in roleOptions
-          ? (roleOptions as { readonly exact?: unknown }).exact !== false
-          : true;
-      const candidates: HTMLElement[] = [];
-      if (role === "link") {
-        candidates.push(...document.querySelectorAll<HTMLElement>("a"));
-      }
-      if (role === "button") {
-        candidates.push(...document.querySelectorAll<HTMLElement>("button"));
-      }
-      const match = candidates.find((element) => {
-        if (!elementIsVisible(element, width)) return false;
-        const accessibleName =
-          element.textContent?.replaceAll(/\s+/g, " ").trim() ?? "";
-        return exact ? accessibleName === name : accessibleName.includes(name);
-      });
-      if (!match) throw new Error(`fake ${role} target was not found`);
-      return fakeLocator(match, width);
-    },
-    viewportSize: () => (width === null ? null : { height: 900, width }),
-    waitForFunction: async (pageFunction: unknown, arg: unknown) => {
-      if (typeof pageFunction !== "function")
-        throw new Error("fake wait predicate was not a function");
-      const predicateArgument =
-        typeof arg === "object" && arg !== null && "element" in arg
-          ? (arg as FakeElementHandle).element
-          : arg;
-      const result = (pageFunction as (value: unknown) => unknown)(
-        predicateArgument
-      );
-      if (!result) {
-        throw new Error("fake account section did not settle");
-      }
-      return { dispose: async () => {}, jsonValue: async () => result };
-    },
-  });
-  return page;
-};
+const makeFakePage = (width: number | null): AccountSectionNavigationPage => ({
+  getSectionLink: (label) => {
+    const candidates = Array.from(document.querySelectorAll("a"));
+    const match = candidates.find((element) => {
+      if (!elementIsVisible(element, width)) return false;
+      const accessibleName =
+        element.textContent?.replaceAll(/\s+/g, " ").trim() ?? "";
+      return accessibleName.includes(label);
+    });
+    if (!match) throw new Error("fake link target was not found");
+    return fakeLocator(match, width);
+  },
+  viewportSize: () => (width === null ? null : { height: 900, width }),
+  waitForFunction: async <A>(predicate: (arg: A) => boolean, arg: A) => {
+    if (!predicate(arg)) throw new Error("fake account section did not settle");
+  },
+});
 
 const setResponsiveNavigationVisibility = (
   mode: "desktop" | "mobile"

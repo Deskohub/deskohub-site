@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import type { AccountSection } from "@/features/account/sections";
 import {
   isWorkspaceE2EDiagnosticCode,
@@ -47,6 +47,12 @@ export type AccountLayoutNavigationViewport = Readonly<{
   readonly height: number;
   readonly width: number;
 }>;
+
+type AccountLayoutNavigationPage = Parameters<typeof selectAccountSection>[0] &
+  Parameters<typeof isAccountSectionOffered>[0] &
+  Pick<Page, "setViewportSize"> & {
+    readonly locator: (selector: string) => Pick<Locator, "waitFor">;
+  };
 
 const formatAccountLayoutNavigationFailureMessage = (
   phase: AccountLayoutNavigationPhase,
@@ -107,7 +113,7 @@ export const runAccountLayoutNavigationPhase = async <A>(
 };
 
 const switchAccountSection = async (
-  page: Page,
+  page: AccountLayoutNavigationPage,
   section: AccountSection,
   viewport: AccountLayoutNavigationViewport
 ): Promise<void> => {
@@ -123,7 +129,7 @@ const switchAccountSection = async (
 };
 
 const setLayoutViewport = async (
-  page: Page,
+  page: Pick<Page, "setViewportSize">,
   viewport: AccountLayoutNavigationViewport
 ): Promise<void> => {
   try {
@@ -139,7 +145,7 @@ const setLayoutViewport = async (
  * one is captured.
  */
 export async function verifyAccountLayoutNavigation(
-  page: Page,
+  page: AccountLayoutNavigationPage,
   captureSection:
     | ((section: (typeof accountSections)[number]) => Promise<void>)
     | undefined,

@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { Effect } from "effect";
 import {
   type AccountSection,
@@ -45,10 +45,46 @@ type AccountSectionWaitInput = {
   readonly section: AccountSection;
 };
 
-export type AccountSectionPage = Pick<
+type AccountSectionLink = Pick<Locator, "click"> & {
+  readonly waitForHandler: () => Promise<void>;
+};
+
+type AccountSectionWait = {
+  readonly waitForFunction: {
+    (
+      predicate: (landmark: string) => boolean,
+      landmark: string,
+      options: { readonly timeout: number }
+    ): Promise<unknown>;
+    (
+      predicate: (input: AccountSectionWaitInput) => boolean,
+      input: AccountSectionWaitInput,
+      options: { readonly timeout: number }
+    ): Promise<unknown>;
+  };
+};
+
+type AccountSectionPage = Pick<
   Page,
   "getByRole" | "viewportSize" | "waitForFunction"
 >;
+
+export type AccountSectionNavigationPage = AccountSectionWait &
+  Pick<Page, "viewportSize"> & {
+    readonly getSectionLink: (label: string) => AccountSectionLink;
+  };
+
+const getSectionLink = (
+  page: AccountSectionPage | AccountSectionNavigationPage,
+  label: string
+): AccountSectionLink => {
+  if ("getSectionLink" in page) return page.getSectionLink(label);
+  const link = page.getByRole("link", { exact: false, name: label });
+  return {
+    click: (options) => link.click(options),
+    waitForHandler: () => waitForReactClickHandler(page, link),
+  };
+};
 
 export type AccountSectionSelectionStage =
   | "link-handler-wait"
@@ -204,12 +240,22 @@ const readDesktopMode = (
  */
 export const flagGatedAccountSections: readonly AccountSection[] = ["security"];
 
+type AccountSectionOffer = {
+  readonly label: string;
+  readonly navigationLabel: string;
+};
+
 /**
  * Whether the hydrated desktop account navigation offers the section. A
  * caller that walks every section skips a flag-gated one that is hidden.
  */
 export const isAccountSectionOffered = (
-  page: Pick<Page, "evaluate">,
+  page: {
+    readonly evaluate: (
+      predicate: (offer: AccountSectionOffer) => boolean,
+      offer: AccountSectionOffer
+    ) => Promise<boolean>;
+  },
   section: AccountSection
 ): Promise<boolean> =>
   page.evaluate(
@@ -226,26 +272,28 @@ export const isAccountSectionOffered = (
   );
 
 export const selectAccountSection = async (
-  page: AccountSectionPage,
+  page: AccountSectionPage | AccountSectionNavigationPage,
   section: AccountSection,
   onStage?: (stage: AccountSectionSelectionStage) => void
 ): Promise<void> => {
   const timeout = workspaceE2ETimeouts.browserAction;
-  const label = accountSectionLabel(section, locale);
-  const sectionLink = page.getByRole("link", {
-    exact: false,
-    name: label,
-  });
+  const sectionLink = getSectionLink(
+    page,
+    accountSectionLabel(section, locale)
+  );
 
   onStage?.("link-handler-wait");
-  await waitForReactClickHandler(page, sectionLink);
+  await sectionLink.waitForHandler();
 
   const hydrationAnchor = accountSectionHydrationAnchors[section];
   if (hydrationAnchor !== undefined) {
     onStage?.("panel-hydration-wait");
-    await page.waitForFunction(accountSectionPanelIsHydrated, hydrationAnchor, {
-      timeout: workspaceE2ETimeouts.uiTransition,
-    });
+    const sectionWait: AccountSectionWait = page;
+    await sectionWait.waitForFunction(
+      accountSectionPanelIsHydrated,
+      hydrationAnchor,
+      { timeout: workspaceE2ETimeouts.uiTransition }
+    );
   }
 
   onStage?.("native-link-click");
@@ -260,7 +308,7 @@ export const selectAccountSection = async (
  * visible, without selecting it.
  */
 export const waitForSelectedAccountSection = async (
-  page: AccountSectionPage,
+  page: AccountSectionWait & Pick<Page, "viewportSize">,
   section: AccountSection,
   copy?: AccountSectionCopy
 ): Promise<void> => {

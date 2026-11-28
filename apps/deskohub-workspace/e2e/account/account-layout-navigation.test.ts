@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import type { Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { createElement, useState } from "react";
 import { AccountShell } from "@/features/account/components/shell/account-shell";
@@ -165,18 +165,6 @@ function AccountShellHarness({
   );
 }
 
-type FakeLocator = {
-  readonly click: () => Promise<void>;
-  readonly elementHandle: () => Promise<FakeElementHandle>;
-  readonly isVisible: () => Promise<boolean>;
-  readonly waitFor: (options?: { readonly state?: string }) => Promise<void>;
-};
-
-type FakeElementHandle = {
-  readonly dispose: () => Promise<void>;
-  readonly element: Element;
-};
-
 type FakePageOptions = {
   readonly onSetViewport?: (viewport: {
     readonly height: number;
@@ -208,55 +196,54 @@ const elementIsVisible = (element: Element): boolean => {
   return true;
 };
 
-const fakeLocator = (element: Element): FakeLocator => ({
+const fakeLocator = (element: Element) => ({
   click: async () => {
     if (!elementIsVisible(element)) throw new Error("fake target is hidden");
     fireEvent.click(element);
   },
-  elementHandle: async () => ({
-    dispose: async () => {},
-    element,
-  }),
-  isVisible: async () => elementIsVisible(element),
-  waitFor: async (waitOptions = {}) => {
-    if (waitOptions.state === "visible" && !elementIsVisible(element))
+  waitForHandler: async () => {
+    const key = Object.keys(element).find((part) =>
+      part.startsWith("__reactProps$")
+    );
+    const props: unknown =
+      key === undefined ? undefined : Reflect.get(element, key);
+    if (
+      typeof props !== "object" ||
+      props === null ||
+      !("onClick" in props) ||
+      typeof props.onClick !== "function"
+    ) {
+      throw new Error("fake link was not hydrated");
+    }
+  },
+  waitFor: async (waitOptions?: Parameters<Locator["waitFor"]>[0]) => {
+    if (waitOptions?.state === "visible" && !elementIsVisible(element))
       throw new Error("fake target did not become visible");
   },
 });
 
-const makeFakePage = (options: FakePageOptions = {}): Page => {
+const makeFakePage = (
+  options: FakePageOptions = {}
+): Parameters<typeof verifyAccountLayoutNavigation>[0] => {
   let viewport = { height: 900, width: 1024 };
   Object.defineProperty(window, "innerWidth", {
     configurable: true,
     value: viewport.width,
   });
 
-  const getByRole = (
-    role: "link",
-    roleOptions: { readonly exact?: boolean; readonly name?: string } = {}
-  ) => {
-    const candidates = Array.from(
-      document.querySelectorAll<HTMLAnchorElement>("a")
-    );
-    const name = roleOptions.name ?? "";
-    const exact = roleOptions.exact !== false;
-    const element = candidates.find((candidate) => {
-      if (!elementIsVisible(candidate)) return false;
-      const accessibleName =
-        candidate.textContent?.replaceAll(/\s+/g, " ").trim() ?? "";
-      return exact ? accessibleName === name : accessibleName.includes(name);
-    });
-    if (!element) throw new Error(`fake ${role} target was not found`);
-    return fakeLocator(element);
-  };
-
-  const page = Object.assign({} as Page, {
-    evaluate: async (pageFunction: unknown, arg: unknown) => {
-      if (typeof pageFunction !== "function")
-        throw new Error("fake evaluate target was not a function");
-      return (pageFunction as (value: unknown) => unknown)(arg);
+  return {
+    evaluate: async (pageFunction, arg) => pageFunction(arg),
+    getSectionLink: (label) => {
+      const candidates = Array.from(document.querySelectorAll("a"));
+      const element = candidates.find((candidate) => {
+        if (!elementIsVisible(candidate)) return false;
+        const accessibleName =
+          candidate.textContent?.replaceAll(/\s+/g, " ").trim() ?? "";
+        return accessibleName.includes(label);
+      });
+      if (!element) throw new Error("fake link target was not found");
+      return fakeLocator(element);
     },
-    getByRole,
     locator: (selector: string) => {
       const elements = Array.from(document.querySelectorAll(selector));
       if (elements.length > 1) {
@@ -280,22 +267,11 @@ const makeFakePage = (options: FakePageOptions = {}): Page => {
       });
     },
     viewportSize: () => viewport,
-    waitForFunction: async (pageFunction: unknown, arg: unknown) => {
-      if (typeof pageFunction !== "function")
-        throw new Error("fake wait predicate was not a function");
-      const predicateArgument =
-        typeof arg === "object" && arg !== null && "element" in arg
-          ? arg.element
-          : arg;
-      const result = (pageFunction as (value: unknown) => unknown)(
-        predicateArgument
-      );
-      if (!result) throw new Error("fake account section did not settle");
-      return { dispose: async () => {}, jsonValue: async () => result };
+    waitForFunction: async <A>(predicate: (arg: A) => boolean, arg: A) => {
+      if (!predicate(arg))
+        throw new Error("fake account section did not settle");
     },
-  });
-
-  return page;
+  };
 };
 
 beforeAll(registerWorkspaceComponentTestEnv);

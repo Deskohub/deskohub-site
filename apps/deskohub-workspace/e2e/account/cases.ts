@@ -1,7 +1,4 @@
-import type {
-  DotyposCustomerId,
-  DotyposReservationId,
-} from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { parsePhoneNumber } from "@deskohub/phone-number";
 import { Effect, Option } from "effect";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
@@ -442,31 +439,32 @@ export const makeWorkspaceE2EAccountCases = ({
    * satisfy the landing wait, which is why the comparison is exact rather
    * than a substring.
    */
-  const signOutAndRequireAnonymous = (pageLocale: Locale = config.locale) =>
-    Effect.gen(function* () {
-      yield* laneBrowser.signOut;
-      yield* pollUntil(
-        laneBrowser.readUrl.pipe(
-          Effect.map((url) =>
-            url !== undefined &&
-            withoutTrailingSlash(url) === localized("", pageLocale)
-              ? url
-              : undefined
-          )
-        ),
-        {
-          intervalMs: workspaceE2EPollIntervalMs.browser,
-          label: "sign-out landing on the bare locale root",
-          timeoutMs: uiTransition,
-        }
-      );
-      yield* openPage(localized(accountSuffix));
-      yield* waitUrlContains(
-        "anonymous account redirect after sign-out",
-        signInSuffix
-      );
-      yield* waitSignInForm();
-    });
+  const signOutAndRequireAnonymous = Effect.fnUntraced(function* (
+    pageLocale: Locale = config.locale
+  ) {
+    yield* laneBrowser.signOut;
+    yield* pollUntil(
+      laneBrowser.readUrl.pipe(
+        Effect.map((url) =>
+          url !== undefined &&
+          withoutTrailingSlash(url) === localized("", pageLocale)
+            ? url
+            : undefined
+        )
+      ),
+      {
+        intervalMs: workspaceE2EPollIntervalMs.browser,
+        label: "sign-out landing on the bare locale root",
+        timeoutMs: uiTransition,
+      }
+    );
+    yield* openPage(localized(accountSuffix));
+    yield* waitUrlContains(
+      "anonymous account redirect after sign-out",
+      signInSuffix
+    );
+    yield* waitSignInForm();
+  });
 
   /**
    * The share-link sign-in page: the anonymous account redirect lands on the
@@ -562,25 +560,23 @@ export const makeWorkspaceE2EAccountCases = ({
       startedAt,
     });
 
-  const requireAuthUserId = (email: string) =>
-    Effect.gen(function* () {
-      const userId = yield* findAuthUserIdByEmail(email);
-      assert(
-        userId,
-        "expected a synthetic Better Auth user for the verified recipient"
-      );
-      return userId;
-    });
+  const requireAuthUserId = Effect.fnUntraced(function* (email: string) {
+    const userId = yield* findAuthUserIdByEmail(email);
+    assert(
+      userId,
+      "expected a synthetic Better Auth user for the verified recipient"
+    );
+    return userId;
+  });
 
-  const requireLinkedCustomerId = (userId: string) =>
-    Effect.gen(function* () {
-      const customerId = yield* findLinkedDotyposCustomerId(userId);
-      assert(
-        customerId,
-        "expected a linked Dotypos customer for the synthetic account"
-      );
-      return customerId as DotyposCustomerId;
-    });
+  const requireLinkedCustomerId = Effect.fnUntraced(function* (userId: string) {
+    const customerId = yield* findLinkedDotyposCustomerId(userId);
+    assert(
+      customerId,
+      "expected a linked Dotypos customer for the synthetic account"
+    );
+    return customerId;
+  });
 
   const recordFixtureIds = (
     journalRef: WorkspaceE2EAccountJournalRef,
@@ -632,7 +628,7 @@ export const makeWorkspaceE2EAccountCases = ({
   const readProviderProfile = (customerId: string) =>
     requireSyntheticCustomerProfile(
       datasourceConfig,
-      customerId as DotyposCustomerId
+      DotyposCustomerIdSchema.make(customerId)
     ).pipe(
       Effect.timeoutOrElse({
         duration: `${datasourceTimeout} millis`,
@@ -670,8 +666,9 @@ export const makeWorkspaceE2EAccountCases = ({
   ) => ({ execute, id, timeoutMs });
 
   return [
-    makeCase("account-anonymous-redirect", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-anonymous-redirect",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const referralOwnerEmail = makeWorkspaceE2EAccountRecipient(
           config,
           workspaceE2EReferralOwnerRecipientLabel
@@ -720,8 +717,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-sign-in-form", ({ runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-sign-in-form",
+      Effect.fnUntraced(function* ({ runStep }) {
         const invitation = yield* runStep(
           step(
             "require-share-link-sign-in-handoff",
@@ -934,8 +932,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-magic-link-delivery", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-magic-link-delivery",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const firstRequest = yield* runStep(
           step(
             "require-first-accepted-request-handoff",
@@ -1018,8 +1017,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-profile-completion", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-profile-completion",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const invitation = yield* runStep(
           step(
             "require-share-link-referral-handoff",
@@ -1194,8 +1194,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-reservation-transitions", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-reservation-transitions",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const customerId = yield* runStep(
           step(
             "read-linked-synthetic-customer",
@@ -1262,10 +1263,7 @@ export const makeWorkspaceE2EAccountCases = ({
             Effect.gen(function* () {
               const second = reservations[1]?.reservationId;
               assert(second, "second synthetic reservation id missing");
-              yield* cancelSyntheticReservation(
-                datasourceConfig,
-                second as DotyposReservationId
-              );
+              yield* cancelSyntheticReservation(datasourceConfig, second);
             }),
             datasourceTimeout
           )
@@ -1341,8 +1339,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-deletion-marker-reauth", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-deletion-marker-reauth",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const userId = yield* runStep(
           step(
             "read-account-identity",
@@ -1429,8 +1428,9 @@ export const makeWorkspaceE2EAccountCases = ({
         };
       })
     ),
-    makeCase("account-session-lifecycle", ({ runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-session-lifecycle",
+      Effect.fnUntraced(function* ({ runStep }) {
         const reauthentication = yield* runStep(
           step(
             "require-reauthentication-handoff",
@@ -1582,8 +1582,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-deletion-and-reactivation", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-deletion-and-reactivation",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         yield* runStep(
           step(
             "require-completed-deletion-handoff",
@@ -1874,8 +1875,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-passkey-sign-in", ({ runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-passkey-sign-in",
+      Effect.fnUntraced(function* ({ runStep }) {
         const userId = yield* runStep(
           step(
             "require-prompt-passkey",
@@ -1930,8 +1932,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-passkey-management", ({ runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-passkey-management",
+      Effect.fnUntraced(function* ({ runStep }) {
         const userId = yield* runStep(
           step(
             "read-passkey-account-identity",
@@ -2016,8 +2019,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-locale-preference", ({ runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-locale-preference",
+      Effect.fnUntraced(function* ({ runStep }) {
         const czechProfileUrl = new URL(
           getAccountSectionPath("cs-CZ", "profile"),
           config.baseUrl
@@ -2034,23 +2038,25 @@ export const makeWorkspaceE2EAccountCases = ({
          * its own language, so the check reads the same on every site
          * locale.
          */
-        const requireSelectedLanguage = (locale: Locale, description: string) =>
-          Effect.gen(function* () {
-            yield* laneBrowser.openLanguageList;
-            yield* laneBrowser.waitForSelectedLanguage(description, locale);
-            // An Escape can land before the listbox listens for it, and an
-            // open listbox swallows the next step's header click.
-            yield* pollUntil(
-              laneBrowser.dismissLanguageList.pipe(
-                Effect.map((closed) => (closed ? true : undefined))
-              ),
-              {
-                intervalMs: workspaceE2EPollIntervalMs.browser,
-                label: "language list to close",
-                timeoutMs: uiTransition,
-              }
-            );
-          });
+        const requireSelectedLanguage = Effect.fnUntraced(function* (
+          locale: Locale,
+          description: string
+        ) {
+          yield* laneBrowser.openLanguageList;
+          yield* laneBrowser.waitForSelectedLanguage(description, locale);
+          // An Escape can land before the listbox listens for it, and an
+          // open listbox swallows the next step's header click.
+          yield* pollUntil(
+            laneBrowser.dismissLanguageList.pipe(
+              Effect.map((closed) => (closed ? true : undefined))
+            ),
+            {
+              intervalMs: workspaceE2EPollIntervalMs.browser,
+              label: "language list to close",
+              timeoutMs: uiTransition,
+            }
+          );
+        });
 
         /**
          * Opens the Czech profile by its section path. The account
@@ -2058,15 +2064,16 @@ export const makeWorkspaceE2EAccountCases = ({
          * ready once its hydrated panel is visible and renders the Czech
          * language label.
          */
-        const openCzechProfile = (description: string) =>
-          Effect.gen(function* () {
-            yield* openPage(czechProfileUrl);
-            yield* laneBrowser.waitForProfilePanel(description);
-            yield* laneBrowser.waitForLanguageControlLabel(
-              description,
-              czechLanguageLabel
-            );
-          });
+        const openCzechProfile = Effect.fnUntraced(function* (
+          description: string
+        ) {
+          yield* openPage(czechProfileUrl);
+          yield* laneBrowser.waitForProfilePanel(description);
+          yield* laneBrowser.waitForLanguageControlLabel(
+            description,
+            czechLanguageLabel
+          );
+        });
 
         // The case reuses the session the reactivation sign-in opened: the
         // lane's magic-link ledger has no room for another sign-in, and a
@@ -2198,8 +2205,9 @@ export const makeWorkspaceE2EAccountCases = ({
         );
       })
     ),
-    makeCase("account-linking-variants", ({ journalRef, runStep }) =>
-      Effect.gen(function* () {
+    makeCase(
+      "account-linking-variants",
+      Effect.fnUntraced(function* ({ journalRef, runStep }) {
         const mainIdentity = yield* runStep(
           step(
             "read-reactivated-main-identity",

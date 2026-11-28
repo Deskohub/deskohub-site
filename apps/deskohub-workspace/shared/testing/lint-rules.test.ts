@@ -1179,6 +1179,9 @@ const productionProbes = [
   "packages/standard-schema/src/probe.cts",
 ];
 const workspaceProductionProbes = [
+  "apps/deskohub-workspace/e2e/account/probe.ts",
+  "apps/deskohub-workspace/e2e/account/probe.pw.ts",
+  "apps/deskohub-workspace/e2e/account/probe.test.ts",
   "apps/deskohub-workspace/e2e/cases/probe.ts",
   "apps/deskohub-workspace/e2e/cases/probe.browser-acceptance.test.ts",
   "apps/deskohub-workspace/e2e/checkout/probe.ts",
@@ -1291,12 +1294,15 @@ const generatedProbes = [
 ];
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
-  "apps/deskohub-workspace/e2e/account/probe.test.ts",
+  "apps/deskohub-workspace/e2e/access-codes/probe.test.ts",
+  "apps/deskohub-workspace/e2e/account/generated/probe.ts",
+  "apps/deskohub-workspace/e2e/account/paraglide/probe.ts",
   "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
 ];
 const workspaceE2eAllowedProbes = [
+  "apps/deskohub-workspace/e2e/account/allowed.test.ts",
   "apps/deskohub-workspace/e2e/cases/allowed.test.ts",
   "apps/deskohub-workspace/e2e/checkout/allowed.browser-acceptance.test.ts",
   "apps/deskohub-workspace/e2e/playwright-checkout/allowed.pw.ts",

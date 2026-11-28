@@ -1,10 +1,10 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Cause, Effect, Exit, Fiber, Layer } from "effect";
-import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/http";
+import { TestClock } from "effect/testing";
 import type { WorkspaceE2EStep } from "../case-runner";
+import { unopenedE2EDatabase } from "../cases/e2e-fixtures.test-utils";
 import { type WorkspaceE2EError, workspaceE2EError } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
 import type { E2ETelemetry } from "../services/telemetry";
 import type { E2ETelemetryObservation } from "../services/telemetry.mock";
 import { makeE2ETelemetryMock } from "../services/telemetry.mock";
@@ -65,7 +65,7 @@ const makeRunnerLayer = (
 ) =>
   Layer.mergeAll(
     makeE2ETelemetryMock(observations, telemetry),
-    Layer.succeed(E2EDatabase, E2EDatabase.of({ db: {} as never })),
+    unopenedE2EDatabase,
     httpClientLayer,
     TestClock.layer()
   );
@@ -145,7 +145,7 @@ test("finalizes and reports a failed verification step", async () => {
       Effect.provide(
         Layer.mergeAll(
           makeE2ETelemetryMock(observations),
-          Layer.succeed(E2EDatabase, E2EDatabase.of({ db: {} as never })),
+          unopenedE2EDatabase,
           httpClientLayer
         )
       )

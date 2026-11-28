@@ -9,18 +9,20 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { workspaceReservations } from "@/db/schema";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { floorToWholeHour } from "@/shared/utils/temporal";
-import type { DatasourceConfig } from "../config";
+import { getDatasourceConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { E2EDatabase } from "../integrations/database.service";
 import { withWorkspaceE2EReservationHistoryFixture } from "./reservation-history-fixture";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const readReservation = (id: WorkspaceReservationId) =>
-  testDatabase!.db
-    .select()
+  requireValue(testDatabase, "disposable Postgres")
+    .db.select()
     .from(workspaceReservations)
     .where(eq(workspaceReservations.id, id));
 
@@ -37,14 +39,16 @@ describe.skipIf(!testDatabase)(
       const startsAt = floorToWholeHour(
         Temporal.Now.zonedDateTimeISO("UTC").add({ days: 120 })
       ).toInstant();
-      const linkedAccountId = await workspaceFixtures(testDatabase!.db)
+      const linkedAccountId = await workspaceFixtures(
+        requireValue(testDatabase, "disposable Postgres").db
+      )
         .customerAccount({ linkedCustomer: customerId })
         .pipe(Effect.runPromise);
 
       const { fixture, row } = await withWorkspaceE2EReservationHistoryFixture(
         {
           customerId,
-          datasourceConfig: {} as DatasourceConfig,
+          datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
           dotyposReservationId,
         },
         (fixture) =>
@@ -67,7 +71,9 @@ describe.skipIf(!testDatabase)(
       ).pipe(
         Effect.provideService(
           E2EDatabase,
-          E2EDatabase.of({ db: testDatabase!.db })
+          E2EDatabase.of({
+            db: requireValue(testDatabase, "disposable Postgres").db,
+          })
         ),
         Effect.runPromise
       );

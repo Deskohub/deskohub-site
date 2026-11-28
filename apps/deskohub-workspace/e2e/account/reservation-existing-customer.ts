@@ -30,13 +30,44 @@ export const reservationExistingCustomerFailureMessage =
 export const reservationExistingCustomerOperation =
   "verify reservation existing customer card";
 
+type ReservationCustomerControl = Pick<Locator, "click" | "count" | "waitFor">;
+type ReservationCustomerCard = ReservationCustomerControl & {
+  readonly getByText: (
+    text: string,
+    options: { readonly exact: boolean }
+  ) => ReservationCustomerControl;
+};
+type ReservationCustomerPage = Pick<Page, "goto"> & {
+  readonly evaluate: (action: () => void) => Promise<void>;
+  readonly getByRole: (
+    role: "region" | "textbox",
+    options: { readonly exact?: boolean; readonly name: RegExp | string }
+  ) => ReservationCustomerCard;
+  readonly getModeButton: (name: string) => {
+    readonly button: ReservationCustomerControl;
+    readonly waitForHandler: () => Promise<void>;
+  };
+  readonly locator: (selector: string) => ReservationCustomerControl & {
+    readonly first: () => ReservationCustomerControl;
+  };
+};
+
+const getModeButton = (page: Page | ReservationCustomerPage, name: string) => {
+  if ("getModeButton" in page) return page.getModeButton(name);
+  const button = page.getByRole("button", { exact: true, name });
+  return {
+    button,
+    waitForHandler: () => waitForReactClickHandler(page, button),
+  };
+};
+
 export type ReservationExistingCustomerVerification = {
   readonly baseUrl: string;
   /** Captures the allowlisted review screenshot of the current mode. */
   readonly captureReview: (mode: ReservationCustomerMode) => Promise<void>;
   /** The linked account contact the card must show. */
   readonly contact: { readonly email: string; readonly name: string };
-  readonly page: Page;
+  readonly page: Page | ReservationCustomerPage;
   /** Decoded review screenshot opt-in; only review runs switch modes. */
   readonly reviewScreenshots: boolean;
 };
@@ -85,15 +116,12 @@ export async function verifyReservationExistingCustomer({
     };
 
     const switchMode = async (buttonName: string): Promise<void> => {
-      const button = page.getByRole("button", {
-        exact: true,
-        name: buttonName,
-      });
+      const { button, waitForHandler } = getModeButton(page, buttonName);
       await button.waitFor({
         state: "visible",
         timeout: workspaceE2ETimeouts.browserAction,
       });
-      await waitForReactClickHandler(page, button);
+      await waitForHandler();
       await button.click({ timeout: workspaceE2ETimeouts.browserAction });
     };
 
@@ -141,6 +169,6 @@ export async function verifyReservationExistingCustomer({
   }
 }
 
-const expectAbsent = async (locator: Locator): Promise<void> => {
+const expectAbsent = async (locator: Pick<Locator, "count">): Promise<void> => {
   if ((await locator.count()) !== 0) throw new Error("unexpected element");
 };

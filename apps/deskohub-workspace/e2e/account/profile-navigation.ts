@@ -1,5 +1,5 @@
 import { parsePhoneNumber } from "@deskohub/phone-number";
-import { expect, type Page } from "@playwright/test";
+import { type Dialog, expect, type Locator, type Page } from "@playwright/test";
 import { Option } from "effect";
 import {
   type AccountSection,
@@ -46,6 +46,43 @@ type ProfileNavigationFailureKind =
   | "strict-mode-violation"
   | "error";
 
+type ProfileNavigationLocator = Pick<
+  Locator,
+  "click" | "fill" | "inputValue"
+> & {
+  expectVisible: (options: { timeout: number }) => Promise<void>;
+  expectValue: (value: string, options: { timeout: number }) => Promise<void>;
+  expectAttribute: (
+    name: string,
+    value: string,
+    options: { timeout: number }
+  ) => Promise<void>;
+  expectCount: (count: number, options: { timeout: number }) => Promise<void>;
+};
+
+type ProfileNavigationDialog = Pick<Dialog, "accept" | "dismiss" | "type">;
+
+export type ProfileNavigationBrowser = {
+  locator: (selector: string) => ProfileNavigationLocator;
+  headerLink: (name: string) => ProfileNavigationLocator;
+  heading: (name: string, level: number) => ProfileNavigationLocator;
+  selectSection: (
+    section: AccountSection,
+    onStage: (stage: AccountSectionSelectionStage) => void
+  ) => Promise<void>;
+  billingCompanyValidationMessage: () => Promise<string>;
+  waitForDialog: (options: {
+    timeout: number;
+  }) => Promise<ProfileNavigationDialog>;
+  historyBack: () => Promise<void>;
+  expectURL: (url: string, options: { timeout: number }) => Promise<void>;
+  waitForURL: (url: string, options: { timeout: number }) => Promise<void>;
+  goto: (
+    url: string,
+    options: { timeout: number; waitUntil: "load" }
+  ) => Promise<unknown>;
+};
+
 /**
  * Closed, value-free summary of a Playwright failure. The raw error can carry
  * private profile values, so only its kind leaves this module.
@@ -66,8 +103,55 @@ export function triggerProfileHistoryBack(page: Page): Promise<void> {
   });
 }
 
-export async function verifyProfileNavigation(
+const profileNavigationLocator = (
+  locator: Locator
+): ProfileNavigationLocator => ({
+  click: (options) => locator.click(options),
+  fill: (value, options) => locator.fill(value, options),
+  inputValue: (options) => locator.inputValue(options),
+  expectVisible: (options) => expect(locator).toBeVisible(options),
+  expectValue: (value, options) => expect(locator).toHaveValue(value, options),
+  expectAttribute: (name, value, options) =>
+    expect(locator).toHaveAttribute(name, value, options),
+  expectCount: (count, options) => expect(locator).toHaveCount(count, options),
+});
+
+export function verifyProfileNavigation(
   page: Page,
+  baseUrl: string
+): Promise<void> {
+  return verifyProfileNavigationInBrowser(
+    {
+      locator: (selector) => profileNavigationLocator(page.locator(selector)),
+      headerLink: (name) =>
+        profileNavigationLocator(
+          page.getByRole("banner").getByRole("link", { exact: true, name })
+        ),
+      heading: (name, level) =>
+        profileNavigationLocator(
+          page.getByRole("heading", { exact: true, level, name })
+        ),
+      selectSection: (section, onStage) =>
+        selectAccountSection(page, section, onStage),
+      billingCompanyValidationMessage: () =>
+        page.locator(billingCompanyNameSelector).evaluate((input) => {
+          if (!(input instanceof HTMLInputElement)) {
+            throw new Error("billing company name control is not an input");
+          }
+          return input.validationMessage;
+        }),
+      waitForDialog: (options) => page.waitForEvent("dialog", options),
+      historyBack: () => triggerProfileHistoryBack(page),
+      expectURL: (url, options) => expect(page).toHaveURL(url, options),
+      waitForURL: (url, options) => page.waitForURL(url, options),
+      goto: (url, options) => page.goto(url, options),
+    },
+    baseUrl
+  );
+}
+
+export async function verifyProfileNavigationInBrowser(
+  browser: ProfileNavigationBrowser,
   baseUrl: string
 ): Promise<void> {
   let diagnosticCode: WorkspaceE2EProfileNavigationDiagnosticCode =
@@ -77,7 +161,7 @@ export async function verifyProfileNavigation(
     section: AccountSection,
     onSelectionStage?: (stage: AccountSectionSelectionStage) => void
   ): Promise<void> => {
-    await selectAccountSection(page, section, (stage) => {
+    await browser.selectSection(section, (stage) => {
       selectionStage = stage;
       onSelectionStage?.(stage);
     });
@@ -90,17 +174,10 @@ export async function verifyProfileNavigation(
     // A section switch records its section in the account pathname.
     const accountSectionUrl = (section: AccountSection) =>
       `${accountUrl}/${section}`;
-    const profileForm = page.locator(profileFormSelector);
-    const firstName = page.locator(profileFirstNameSelector);
-    const header = page.getByRole("banner");
-    const homeLink = header.getByRole("link", {
-      exact: true,
-      name: "Deskohub Workspace",
-    });
-    const accountLink = header.getByRole("link", {
-      exact: true,
-      name: "Account",
-    });
+    const profileForm = browser.locator(profileFormSelector);
+    const firstName = browser.locator(profileFirstNameSelector);
+    const homeLink = browser.headerLink("Deskohub Workspace");
+    const accountLink = browser.headerLink("Account");
 
     const selectProfileSection = async (
       onSelectionStage?: (stage: AccountSectionSelectionStage) => void
@@ -110,7 +187,7 @@ export async function verifyProfileNavigation(
         diagnosticCode =
           "account_profile_persisted_profile_form_visibility_failed";
       }
-      await expect(profileForm).toBeVisible({
+      await profileForm.expectVisible({
         timeout: workspaceE2ETimeouts.browserAction,
       });
     };
@@ -120,10 +197,10 @@ export async function verifyProfileNavigation(
       firstName: await firstName.inputValue({
         timeout: workspaceE2ETimeouts.browserAction,
       }),
-      lastName: await page.locator(profileLastNameSelector).inputValue({
+      lastName: await browser.locator(profileLastNameSelector).inputValue({
         timeout: workspaceE2ETimeouts.browserAction,
       }),
-      phone: await page.locator(profilePhoneSelector).inputValue({
+      phone: await browser.locator(profilePhoneSelector).inputValue({
         timeout: workspaceE2ETimeouts.browserAction,
       }),
     };
@@ -132,21 +209,19 @@ export async function verifyProfileNavigation(
       () => new Error("profile phone is not a valid canonical phone number")
     );
     await selectSection("billing");
-    await expect(page.locator(accountSectionLandmarks.billing)).toBeVisible({
+    await browser.locator(accountSectionLandmarks.billing).expectVisible({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await expect(
-      page.getByRole("heading", {
-        exact: true,
-        level: 2,
-        name: accountSectionLabel("billing", "en-US"),
-      })
-    ).toBeVisible({ timeout: workspaceE2ETimeouts.browserAction });
+    await browser
+      .heading(accountSectionLabel("billing", "en-US"), 2)
+      .expectVisible({ timeout: workspaceE2ETimeouts.browserAction });
     const originalBilling = {
-      companyName: await page.locator(billingCompanyNameSelector).inputValue({
-        timeout: workspaceE2ETimeouts.browserAction,
-      }),
-      kind: await page.locator(billingKindSelector).inputValue({
+      companyName: await browser
+        .locator(billingCompanyNameSelector)
+        .inputValue({
+          timeout: workspaceE2ETimeouts.browserAction,
+        }),
+      kind: await browser.locator(billingKindSelector).inputValue({
         timeout: workspaceE2ETimeouts.browserAction,
       }),
     };
@@ -155,32 +230,28 @@ export async function verifyProfileNavigation(
 
     diagnosticCode = "account_profile_clean_navigation_failed";
     await Promise.all([
-      page.waitForURL(homeUrl, {
+      browser.waitForURL(homeUrl, {
         timeout: workspaceE2ETimeouts.browserNavigation,
       }),
       homeLink.click({ timeout: workspaceE2ETimeouts.browserAction }),
     ]);
 
-    await expect(accountLink).toBeVisible({
+    await accountLink.expectVisible({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await expect(accountLink).toHaveAttribute("href", accountPath, {
+    await accountLink.expectAttribute("href", accountPath, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
     await Promise.all([
-      page.waitForURL(accountUrl, {
+      browser.waitForURL(accountUrl, {
         timeout: workspaceE2ETimeouts.browserNavigation,
       }),
       accountLink.click({ timeout: workspaceE2ETimeouts.browserAction }),
     ]);
     await selectProfileSection();
-    await expect(
-      page.getByRole("heading", {
-        exact: true,
-        level: 1,
-        name: unavailableHeading,
-      })
-    ).toHaveCount(0, { timeout: workspaceE2ETimeouts.browserAction });
+    await browser
+      .heading(unavailableHeading, 1)
+      .expectCount(0, { timeout: workspaceE2ETimeouts.browserAction });
 
     diagnosticCode = "account_profile_draft_retention_failed";
     await firstName.fill(draftFirstName, {
@@ -188,62 +259,52 @@ export async function verifyProfileNavigation(
     });
 
     await selectSection("billing");
-    await expect(page.locator(accountSectionLandmarks.billing)).toBeVisible({
+    await browser.locator(accountSectionLandmarks.billing).expectVisible({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await expect(
-      page.getByRole("heading", {
-        exact: true,
-        level: 2,
-        name: accountSectionLabel("billing", "en-US"),
-      })
-    ).toBeVisible({ timeout: workspaceE2ETimeouts.browserAction });
+    await browser
+      .heading(accountSectionLabel("billing", "en-US"), 2)
+      .expectVisible({ timeout: workspaceE2ETimeouts.browserAction });
     await selectProfileSection();
-    await expect(firstName).toHaveValue(draftFirstName, {
+    await firstName.expectValue(draftFirstName, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
 
     diagnosticCode = "account_profile_hidden_billing_validation_failed";
     await selectSection("billing");
-    await expect(page.locator(accountSectionLandmarks.billing)).toBeVisible({
+    await browser.locator(accountSectionLandmarks.billing).expectVisible({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await page.locator(billingCompanyNameSelector).fill("", {
+    await browser.locator(billingCompanyNameSelector).fill("", {
       timeout: workspaceE2ETimeouts.browserAction,
     });
     await selectProfileSection();
-    await page.locator(profileSubmitSelector).click({
+    await browser.locator(profileSubmitSelector).click({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await expect(page.locator(accountSectionLandmarks.billing)).toBeVisible({
+    await browser.locator(accountSectionLandmarks.billing).expectVisible({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    await expect(page.locator(billingCompanyNameSelector)).toHaveValue("", {
+    await browser.locator(billingCompanyNameSelector).expectValue("", {
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    const hiddenBillingValidationMessage = await page
-      .locator(billingCompanyNameSelector)
-      .evaluate((input) => {
-        if (!(input instanceof HTMLInputElement)) {
-          throw new Error("billing company name control is not an input");
-        }
-        return input.validationMessage;
-      });
+    const hiddenBillingValidationMessage =
+      await browser.billingCompanyValidationMessage();
     expect(hiddenBillingValidationMessage).not.toBe("");
-    await page
+    await browser
       .locator(billingCompanyNameSelector)
       .fill(originalBilling.companyName, {
         timeout: workspaceE2ETimeouts.browserAction,
       });
     await selectProfileSection();
-    await expect(firstName).toHaveValue(draftFirstName, {
+    await firstName.expectValue(draftFirstName, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
 
     // The profile form remains mounted while its profile panel is hidden.
     diagnosticCode = "account_profile_header_dismissal_failed";
     await selectSection("billing");
-    const headerClickDialogPromise = page.waitForEvent("dialog", {
+    const headerClickDialogPromise = browser.waitForDialog({
       timeout: workspaceE2ETimeouts.browserAction,
     });
     const headerClickPromise = homeLink.click({
@@ -253,33 +314,33 @@ export async function verifyProfileNavigation(
     expect(headerClickDialog.type()).toBe("confirm");
     await headerClickDialog.dismiss();
     await headerClickPromise;
-    await expect(page).toHaveURL(accountSectionUrl("billing"), {
+    await browser.expectURL(accountSectionUrl("billing"), {
       timeout: workspaceE2ETimeouts.browserAction,
     });
     await selectProfileSection();
-    await expect(firstName).toHaveValue(draftFirstName, {
+    await firstName.expectValue(draftFirstName, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
 
     diagnosticCode = "account_profile_history_dismissal_failed";
-    const backDialogPromise = page.waitForEvent("dialog", {
+    const backDialogPromise = browser.waitForDialog({
       timeout: workspaceE2ETimeouts.browserAction,
     });
-    const backTriggerPromise = triggerProfileHistoryBack(page);
+    const backTriggerPromise = browser.historyBack();
     const backDialog = await backDialogPromise;
     expect(backDialog.type()).toBe("confirm");
     await backDialog.dismiss();
     await backTriggerPromise;
-    await expect(page).toHaveURL(accountSectionUrl("profile"), {
+    await browser.expectURL(accountSectionUrl("profile"), {
       timeout: workspaceE2ETimeouts.browserAction,
     });
     await selectProfileSection();
-    await expect(firstName).toHaveValue(draftFirstName, {
+    await firstName.expectValue(draftFirstName, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
 
     diagnosticCode = "account_profile_discard_confirmation_failed";
-    const leaveDialogPromise = page.waitForEvent("dialog", {
+    const leaveDialogPromise = browser.waitForDialog({
       timeout: workspaceE2ETimeouts.browserAction,
     });
     const leaveClickPromise = homeLink.click({
@@ -289,12 +350,12 @@ export async function verifyProfileNavigation(
     expect(leaveDialog.type()).toBe("confirm");
     await leaveDialog.accept();
     await leaveClickPromise;
-    await expect(page).toHaveURL(homeUrl, {
+    await browser.expectURL(homeUrl, {
       timeout: workspaceE2ETimeouts.browserNavigation,
     });
 
     diagnosticCode = "account_profile_persisted_document_reload_failed";
-    await page.goto(accountUrl, {
+    await browser.goto(accountUrl, {
       waitUntil: "load",
       timeout: workspaceE2ETimeouts.browserNavigation,
     });
@@ -305,36 +366,40 @@ export async function verifyProfileNavigation(
     });
 
     diagnosticCode = "account_profile_persisted_first_name_restore_failed";
-    await expect(firstName).toHaveValue(originalProfile.firstName, {
+    await firstName.expectValue(originalProfile.firstName, {
       timeout: workspaceE2ETimeouts.browserAction,
     });
 
     diagnosticCode = "account_profile_persisted_last_name_restore_failed";
-    await expect(page.locator(profileLastNameSelector)).toHaveValue(
-      originalProfile.lastName,
-      { timeout: workspaceE2ETimeouts.browserAction }
-    );
+    await browser
+      .locator(profileLastNameSelector)
+      .expectValue(originalProfile.lastName, {
+        timeout: workspaceE2ETimeouts.browserAction,
+      });
 
     diagnosticCode = "account_profile_persisted_phone_restore_failed";
-    await expect(page.locator(profilePhoneSelector)).toHaveValue(
-      canonicalOriginalPhone,
-      { timeout: workspaceE2ETimeouts.browserAction }
-    );
+    await browser
+      .locator(profilePhoneSelector)
+      .expectValue(canonicalOriginalPhone, {
+        timeout: workspaceE2ETimeouts.browserAction,
+      });
 
     diagnosticCode = "account_profile_persisted_billing_navigation_failed";
     await selectSection("billing");
 
     diagnosticCode = "account_profile_persisted_billing_kind_restore_failed";
-    await expect(page.locator(billingKindSelector)).toHaveValue(
-      originalBilling.kind,
-      { timeout: workspaceE2ETimeouts.browserAction }
-    );
+    await browser
+      .locator(billingKindSelector)
+      .expectValue(originalBilling.kind, {
+        timeout: workspaceE2ETimeouts.browserAction,
+      });
 
     diagnosticCode = "account_profile_persisted_billing_company_restore_failed";
-    await expect(page.locator(billingCompanyNameSelector)).toHaveValue(
-      originalBilling.companyName,
-      { timeout: workspaceE2ETimeouts.browserAction }
-    );
+    await browser
+      .locator(billingCompanyNameSelector)
+      .expectValue(originalBilling.companyName, {
+        timeout: workspaceE2ETimeouts.browserAction,
+      });
 
     diagnosticCode =
       "account_profile_persisted_return_profile_navigation_failed";
@@ -342,13 +407,9 @@ export async function verifyProfileNavigation(
 
     diagnosticCode =
       "account_profile_persisted_unavailable_heading_expectation_failed";
-    await expect(
-      page.getByRole("heading", {
-        exact: true,
-        level: 1,
-        name: unavailableHeading,
-      })
-    ).toHaveCount(0, { timeout: workspaceE2ETimeouts.browserAction });
+    await browser
+      .heading(unavailableHeading, 1)
+      .expectCount(0, { timeout: workspaceE2ETimeouts.browserAction });
   } catch (cause) {
     const failureKind = classifyProfileNavigationFailure(cause);
     throw workspaceE2EError(

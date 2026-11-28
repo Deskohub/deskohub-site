@@ -1,4 +1,7 @@
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import {
@@ -92,7 +95,11 @@ export type WorkspaceE2EAuthoredReservation = Omit<
 
 export const findLinkedDotyposCustomerId = (
   accountId: string
-): Effect.Effect<string | undefined, WorkspaceE2EError, E2EDatabase> =>
+): Effect.Effect<
+  DotyposCustomerId | undefined,
+  WorkspaceE2EError,
+  E2EDatabase
+> =>
   Effect.gen(function* () {
     const { db } = yield* E2EDatabase;
     const rows = yield* runDatabaseOperation(
@@ -121,7 +128,7 @@ export const removeSyntheticAccountLink = (
             eq(customerAccounts.id, customerAccountIdSchema.make(accountId)),
             eq(
               customerAccounts.dotyposCustomerId,
-              customerId as DotyposCustomerId
+              DotyposCustomerIdSchema.make(customerId)
             )
           )
         )

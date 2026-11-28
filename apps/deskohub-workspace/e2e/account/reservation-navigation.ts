@@ -1,6 +1,12 @@
 import { equal } from "node:assert/strict";
-import type { Browser, Page } from "@playwright/test";
-import { expect } from "@playwright/test";
+import type {
+  Browser,
+  BrowserContext,
+  Locator,
+  Page,
+  Response,
+} from "@playwright/test";
+import { expect as playwrightExpect } from "@playwright/test";
 import { Data } from "effect";
 import { type Locale, m } from "@/features/i18n";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -147,15 +153,61 @@ export const toWorkspaceE2EReservationHistoryFailure = (cause: unknown) => {
   return workspaceE2EError(message, { operation });
 };
 
-type ReservationHistoryNavigationInput = {
+type ReservationHistoryScenario = {
   readonly baseUrl: string;
-  readonly browser: Browser;
   readonly bypassSecret: string | undefined;
   readonly captureStatusReview: (
     stage: WorkspaceE2EReservationStatusReviewStage
   ) => Promise<void>;
   readonly fixture: WorkspaceE2EReservationHistoryFixture;
+};
+
+type ReservationHistoryNavigationInput = ReservationHistoryScenario & {
+  readonly browser: Browser;
   readonly page: Page;
+};
+
+type ReservationHistorySelectors<Located> = {
+  readonly getByRole: (...args: Parameters<Page["getByRole"]>) => Located;
+  readonly getByText: (...args: Parameters<Page["getByText"]>) => Located;
+  readonly locator: (selector: string) => Located;
+};
+
+export type ReservationHistoryLocator<Located> =
+  ReservationHistorySelectors<Located> & Pick<Locator, "click">;
+
+export type ReservationHistoryPage<Located> =
+  ReservationHistorySelectors<Located> &
+    Pick<Page, "goBack" | "goForward" | "reload" | "url" | "waitForURL"> & {
+      readonly goto: (
+        ...args: Parameters<Page["goto"]>
+      ) => Promise<Pick<Response, "status"> | null>;
+      readonly waitForFunction: (
+        predicate: typeof workspaceE2EReservationStatusLinkHydrationPredicate,
+        statusPath: string,
+        options: { readonly timeout: number }
+      ) => Promise<unknown>;
+    };
+
+type ReservationHistoryContext<Located> = Pick<
+  BrowserContext,
+  "addCookies" | "close"
+> & {
+  readonly newPage: () => Promise<ReservationHistoryPage<Located>>;
+};
+
+type ReservationHistoryBrowserInput<Located> = ReservationHistoryScenario & {
+  readonly browser: {
+    readonly newContext: (
+      ...args: Parameters<Browser["newContext"]>
+    ) => Promise<ReservationHistoryContext<Located>>;
+  };
+  readonly page: ReservationHistoryPage<Located>;
+};
+
+type ReservationHistoryExpect<Located> = (locator: Located) => {
+  readonly toBeVisible: () => Promise<void>;
+  readonly toHaveCount: (count: number) => Promise<void>;
 };
 
 export type WorkspaceE2EReservationHistoryUrls = {
@@ -211,8 +263,11 @@ const workspaceE2EReservationStatusLinkHydrationPredicate = (
   );
 };
 
-const expectFulfilledStatus = async (
-  page: Page,
+const expectFulfilledStatus = async <
+  Located extends ReservationHistoryLocator<Located>,
+>(
+  page: ReservationHistoryPage<Located>,
+  expect: ReservationHistoryExpect<Located>,
   fixture: WorkspaceE2EReservationHistoryFixture,
   mode: WorkspaceE2EReservationStatusPresentation
 ) => {
@@ -230,8 +285,11 @@ const expectFulfilledStatus = async (
   await expect(page.locator("[data-reservation-access-code]")).toHaveCount(0);
 };
 
-const expectReservationAccessPresentation = async (
-  page: Page,
+const expectReservationAccessPresentation = async <
+  Located extends ReservationHistoryLocator<Located>,
+>(
+  page: ReservationHistoryPage<Located>,
+  expect: ReservationHistoryExpect<Located>,
   mode: WorkspaceE2EReservationStatusPresentation
 ) => {
   const root =
@@ -248,7 +306,7 @@ const expectReservationAccessPresentation = async (
 };
 
 const waitForReservationStatusLinkHydration = async (
-  page: Page,
+  page: Pick<ReservationHistoryPage<unknown>, "waitForFunction">,
   statusPath: string
 ): Promise<void> => {
   await page.waitForFunction(
@@ -262,8 +320,9 @@ const waitForReservationStatusLinkHydration = async (
  * A signed-out visitor of a status link signs in first and comes back to it;
  * the sign-in page shows nothing of the reservation.
  */
-const expectWorkspaceE2EReservationSignIn = async (
-  page: Page,
+const expectWorkspaceE2EReservationSignIn = async <Located>(
+  page: ReservationHistoryPage<Located>,
+  expect: ReservationHistoryExpect<Located>,
   {
     reservationId,
     statusPath,
@@ -302,7 +361,10 @@ const expectWorkspaceE2EReservationSignIn = async (
   await expect(page.locator("#checkout-status-access")).toHaveCount(0);
 };
 
-const expectUnavailableAccess = async (page: Page) => {
+const expectUnavailableAccess = async <Located>(
+  page: ReservationHistoryPage<Located>,
+  expect: ReservationHistoryExpect<Located>
+) => {
   const unavailableTitle = m.reservationAccessUnavailableTitle(
     {},
     { locale: "en-US" satisfies Locale }
@@ -321,8 +383,9 @@ const expectUnavailableAccess = async (page: Page) => {
   await expect(page.locator("[data-reservation-access-code]")).toHaveCount(0);
 };
 
-const expectInvalidAccess = async (
-  page: Page,
+const expectInvalidAccess = async <Located>(
+  page: ReservationHistoryPage<Located>,
+  expect: ReservationHistoryExpect<Located>,
   fixture: WorkspaceE2EReservationHistoryFixture
 ) => {
   const invalidLinkTitle = m.reservationAccessInvalidLinkTitle(
@@ -354,7 +417,7 @@ const runReservationHistoryNavigationPair = async ({
 }: {
   readonly action: () => Promise<unknown>;
   readonly actionStage: WorkspaceE2EReservationHistorySubstage;
-  readonly page: Page;
+  readonly page: Pick<Page, "waitForURL">;
   readonly url: string;
   readonly urlStage: WorkspaceE2EReservationHistorySubstage;
 }) =>
@@ -367,9 +430,10 @@ const runReservationHistoryNavigationPair = async ({
     runReservationHistoryStage(actionStage, action),
   ]);
 
-const verifyPrivateRoutes = async (
-  input: ReservationHistoryNavigationInput,
-  urls: WorkspaceE2EReservationHistoryUrls
+const verifyPrivateRoutes = async <Located>(
+  input: ReservationHistoryBrowserInput<Located>,
+  urls: WorkspaceE2EReservationHistoryUrls,
+  expect: ReservationHistoryExpect<Located>
 ) => {
   const context = await input.browser.newContext({ baseURL: input.baseUrl });
   try {
@@ -391,7 +455,7 @@ const verifyPrivateRoutes = async (
           200,
           "private status route did not load"
         );
-        await expectWorkspaceE2EReservationSignIn(page, {
+        await expectWorkspaceE2EReservationSignIn(page, expect, {
           reservationId: input.fixture.reservationId,
           statusPath: urls.statusPath,
         });
@@ -415,7 +479,7 @@ const verifyPrivateRoutes = async (
           200,
           "tokenless reservation access link did not load"
         );
-        await expectInvalidAccess(page, input.fixture);
+        await expectInvalidAccess(page, expect, input.fixture);
       },
       "assertion"
     );
@@ -424,8 +488,11 @@ const verifyPrivateRoutes = async (
   }
 };
 
-export const verifyWorkspaceE2EReservationHistoryNavigation = async (
-  input: ReservationHistoryNavigationInput
+export const verifyReservationHistoryNavigation = async <
+  Located extends ReservationHistoryLocator<Located>,
+>(
+  input: ReservationHistoryBrowserInput<Located>,
+  expect: ReservationHistoryExpect<Located>
 ): Promise<void> => {
   const urls = makeWorkspaceE2EReservationHistoryUrls(
     input.baseUrl,
@@ -463,7 +530,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "modal-assert-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "modal"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "modal"),
     "assertion"
   );
   await runReservationHistoryStage("modal-capture", () =>
@@ -500,7 +567,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "canonical-direct-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "page"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "page"),
     "assertion"
   );
 
@@ -534,7 +601,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "history-reopen-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "modal"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "modal"),
     "assertion"
   );
 
@@ -556,7 +623,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "status-access-content",
-    () => expectReservationAccessPresentation(input.page, "modal"),
+    () => expectReservationAccessPresentation(input.page, expect, "modal"),
     "assertion"
   );
 
@@ -580,7 +647,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "access-status-return-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "modal"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "modal"),
     "assertion"
   );
 
@@ -602,7 +669,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "history-back-content",
-    () => expectReservationAccessPresentation(input.page, "modal"),
+    () => expectReservationAccessPresentation(input.page, expect, "modal"),
     "assertion"
   );
 
@@ -624,7 +691,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "history-forward-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "modal"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "modal"),
     "assertion"
   );
 
@@ -641,7 +708,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "details-assert-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "page"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "page"),
     "assertion"
   );
   await runReservationHistoryStage("details-capture", () =>
@@ -659,7 +726,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   });
   await runReservationHistoryStage(
     "access-open-assert",
-    () => expectUnavailableAccess(input.page),
+    () => expectUnavailableAccess(input.page, expect),
     "assertion"
   );
 
@@ -689,7 +756,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "access-details-return-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "page"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "page"),
     "assertion"
   );
 
@@ -706,7 +773,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "canonical-access-content",
-    () => expectUnavailableAccess(input.page),
+    () => expectUnavailableAccess(input.page, expect),
     "assertion"
   );
   await runReservationHistoryStage("canonical-access-reload", () =>
@@ -722,7 +789,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "canonical-access-reload-content",
-    () => expectUnavailableAccess(input.page),
+    () => expectUnavailableAccess(input.page, expect),
     "assertion"
   );
 
@@ -749,7 +816,7 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
   );
   await runReservationHistoryStage(
     "canonical-access-status-return-content",
-    () => expectFulfilledStatus(input.page, input.fixture, "page"),
+    () => expectFulfilledStatus(input.page, expect, input.fixture, "page"),
     "assertion"
   );
 
@@ -765,8 +832,14 @@ export const verifyWorkspaceE2EReservationHistoryNavigation = async (
       expect(pageReservationLink(input.page, urls.statusPath)).toHaveCount(1),
     "assertion"
   );
-  await verifyPrivateRoutes(input, urls);
+  await verifyPrivateRoutes(input, urls, expect);
 };
 
-const pageReservationLink = (page: Page, statusPath: string) =>
-  page.locator(`a[href="${statusPath}"]`);
+export const verifyWorkspaceE2EReservationHistoryNavigation = (
+  input: ReservationHistoryNavigationInput
+): Promise<void> => verifyReservationHistoryNavigation(input, playwrightExpect);
+
+const pageReservationLink = <Located>(
+  page: Pick<ReservationHistoryPage<Located>, "locator">,
+  statusPath: string
+) => page.locator(`a[href="${statusPath}"]`);

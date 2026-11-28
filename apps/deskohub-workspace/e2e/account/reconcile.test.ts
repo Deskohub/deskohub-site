@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { Customer } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Exit, Option } from "effect";
-import type { DatasourceConfig } from "../config";
+import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { unopenedE2EDatabase } from "../cases/e2e-fixtures.test-utils";
+import { getDatasourceConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { workspaceE2EError } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
-import type { WorkspaceE2ERunId } from "../run-identifiers";
+import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "./config";
 import {
   emptyWorkspaceE2EAccountJournal,
@@ -17,10 +18,40 @@ import {
   validateWorkspaceE2EAccountLaneJournalOwnership,
   type WorkspaceE2EAccountJournalOwner,
 } from "./reconcile";
+import { WorkspaceE2EAccountResourceService } from "./resources.service";
 import { WorkspaceE2EAccountResourceServiceMock } from "./resources.service.mock";
 
 const recipient = testEmailAddress("delivered+agent-run-agent");
 const otherContact = testEmailAddress("someone.else");
+
+test("rejects malformed journal IDs before changing resources", async () => {
+  const datasourceConfig = getDatasourceConfig(
+    makeTestE2EEnvironment({ DOTYPOS_API_URL: "http://127.0.0.1:1" })
+  );
+  const layer = WorkspaceE2EAccountResourceService.layer(datasourceConfig).pipe(
+    Layer.provide(unopenedE2EDatabase)
+  );
+  const exit = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const resources = yield* WorkspaceE2EAccountResourceService;
+      yield* resources.removeRows({
+        syntheticDotyposCustomerIds: [" customer-sentinel"],
+        syntheticDotyposReservationIds: ["reservation-sentinel"],
+      });
+    }).pipe(Effect.provide(layer))
+  );
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    const failure = Cause.squash(exit.cause);
+    expect(failure).toMatchObject({
+      _tag: "WorkspaceE2EError",
+      operation: "read synthetic account journal IDs",
+    });
+    expect(JSON.stringify(failure)).not.toContain("customer-sentinel");
+    expect(JSON.stringify(failure)).not.toContain("reservation-sentinel");
+  }
+});
 
 const journal: WorkspaceE2EAccountJournal = {
   ...emptyWorkspaceE2EAccountJournal("agent-run"),
@@ -29,7 +60,7 @@ const journal: WorkspaceE2EAccountJournal = {
 };
 
 const owners = {
-  authUserOwners: new Map(),
+  authUserOwners: new Map<string, string | null | undefined>(),
   customerOwners: new Map([
     ["seeded-customer", recipient],
     ["other-contact", otherContact],
@@ -108,22 +139,26 @@ describe("validateWorkspaceE2EAccountLaneJournalOwnership", () => {
  * created during the run. Only the reservation row the account authored
  * proves the run owns both, as `proveAgentEvalRunOwnership` reads it.
  */
-const runId = "agent-run" as WorkspaceE2ERunId;
+const runId = workspaceE2ERunIdSchema.make("agent-run");
 const accountId = "run-account";
 const runRecipient = makeWorkspaceE2EAccountRecipientForRunId(runId, "agent");
 
 type ReconciliationStep = "cancel" | "expire" | "remove rows";
 
 const makeWorld = (unrelatedHold = false) => {
-  const reservations = new Map([
+  const reservations = new Map<
+    string,
+    { email: string; status: "CONFIRMED" | "CANCELLED" }
+  >([
     ["own-hold", { email: runRecipient, status: "CONFIRMED" }],
     ["other-contact-hold", { email: otherContact, status: "CONFIRMED" }],
-    ...(unrelatedHold
-      ? ([
-          ["unrelated-hold", { email: otherContact, status: "CONFIRMED" }],
-        ] as const)
-      : []),
   ]);
+  if (unrelatedHold) {
+    reservations.set("unrelated-hold", {
+      email: otherContact,
+      status: "CONFIRMED",
+    });
+  }
   const customers = new Map([
     ["seeded-customer", { email: runRecipient, expired: false }],
     ["other-contact", { email: otherContact, expired: false }],
@@ -200,7 +235,7 @@ const makeWorld = (unrelatedHold = false) => {
       readAuthUserEmail: (id) => Effect.succeed(authUsers.get(id)),
       readCustomerProfile: (id) =>
         Effect.succeed(
-          Option.some({
+          Option.some<Customer>({
             _cloudId: "synthetic-cloud",
             deleted: false,
             display: true,
@@ -211,7 +246,7 @@ const makeWorld = (unrelatedHold = false) => {
             flags: "",
             id,
             points: null,
-          } as Customer)
+          })
         ),
       readJournal: () => Effect.sync(() => journal),
       readReservationOwner: (id) =>
@@ -234,15 +269,14 @@ const makeWorld = (unrelatedHold = false) => {
   const reconcile = (failing?: ReconciliationStep) =>
     Effect.runPromiseExit(
       prepareWorkspaceE2EAccountLaneReconciliation(
-        {} as DatasourceConfig,
+        getDatasourceConfig(makeTestE2EEnvironment()),
         runId,
         owner
       ).pipe(
         Effect.flatMap((prepared) =>
           reconcileWorkspaceE2EAccountJournals(prepared ? [prepared] : [])
         ),
-        Effect.provide(resources(failing)),
-        Effect.provideService(E2EDatabase, E2EDatabase.of({ db: {} as never }))
+        Effect.provide(Layer.merge(resources(failing), unopenedE2EDatabase))
       )
     );
 

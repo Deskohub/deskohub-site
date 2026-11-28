@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  spyOn,
+  test,
+} from "bun:test";
 import * as fsPromises from "node:fs/promises";
 import { resolve } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -12,6 +20,8 @@ import {
 } from "@/shared/testing/promise-outcome.test-utils";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
+  type AccountReviewLocator,
+  type AccountReviewPage,
   type AccountReviewTarget,
   captureAccountReview,
   captureCallbackHandoffReview,
@@ -57,15 +67,21 @@ const reservationCustomerReviewTargets = [
   "reservation-customer-contact-desktop",
 ] as const;
 
+type ReviewPage = AccountReviewPage<AccountReviewLocator>;
+type PendingReviewPage = Parameters<
+  typeof withSignInPendingReview<AccountReviewLocator>
+>[0];
+type PendingRouteHandler = Parameters<PendingReviewPage["route"]>[1];
+type ScreenshotOptions = Parameters<ReviewPage["screenshot"]>[0];
+
 type FakePage = {
   readonly currentViewport: () => Playwright.ViewportSize | null;
   readonly fontReadyCalls: () => number;
   readonly locatorSelectors: readonly string[];
-  readonly page: Playwright.Page;
-  readonly setCallbackLoadingPresent: (present: boolean) => void;
+  readonly page: ReviewPage;
   readonly setUrl: (url: string) => void;
   readonly screenshotStarted: Promise<void>;
-  readonly screenshotCalls: readonly Record<string, unknown>[];
+  readonly screenshotCalls: readonly ScreenshotOptions[];
   readonly viewportChanges: readonly (Playwright.ViewportSize | null)[];
 };
 
@@ -83,7 +99,9 @@ const makeFakePage = (
     readonly hiddenTitle?: boolean;
     readonly titleCount?: number;
     readonly onFontsReady?: () => Promise<void> | void;
-    readonly onScreenshot?: () => Promise<void> | void;
+    readonly onScreenshot?: (
+      setCallbackLoadingPresent: (present: boolean) => void
+    ) => Promise<void> | void;
     readonly onViewportChange?: (
       viewport: Playwright.ViewportSize | null
     ) => Promise<void> | void;
@@ -92,58 +110,58 @@ const makeFakePage = (
   let currentViewport: Playwright.ViewportSize | null = { ...initialViewport };
   let currentUrl = url;
   let callbackLoadingPresent = options.callbackLoadingPresent ?? true;
+  const setCallbackLoadingPresent = (present: boolean) => {
+    callbackLoadingPresent = present;
+  };
   let fontReadyCallCount = 0;
   const locatorSelectors: string[] = [];
-  const screenshotCalls: Record<string, unknown>[] = [];
+  const screenshotCalls: ScreenshotOptions[] = [];
   const viewportChanges: (Playwright.ViewportSize | null)[] = [];
-  let resolveScreenshotStarted!: () => void;
-  const screenshotStarted = new Promise<void>((resolve) => {
-    resolveScreenshotStarted = resolve;
-  });
+  const { promise: screenshotStarted, resolve: resolveScreenshotStarted } =
+    Promise.withResolvers<void>();
 
   const card = options.card ?? englishCard;
-  const makeLocator = (kind: string): Playwright.Locator =>
-    Object.assign({} as Playwright.Locator, {
-      boundingBox: async () => {
-        if (kind === "main") return { height: 800, width: 1_000, x: 0, y: 0 };
-        if (!callbackLoadingPresent) return null;
-        return { height: 422, width: 512, x: 0, y: 0 };
-      },
-      count: async () => {
-        if (kind === "loading-card" && !callbackLoadingPresent) return 0;
-        return kind === "card-title" ? (options.titleCount ?? 1) : 1;
-      },
-      first: () => makeLocator(kind),
-      locator: (selector: string) =>
-        makeLocator(selector === "h1" ? "card-title" : "card-body"),
-      // Surrounding whitespace is trimmed before comparison.
-      textContent: async () =>
-        ` ${kind === "card-title" ? card.title : card.body}\n`,
-      waitFor: async () => {
-        if (
-          (kind === "loading-card" ||
-            kind === "loading-status" ||
-            kind === "card-title" ||
-            kind === "card-body") &&
-          !callbackLoadingPresent
-        )
-          throw new Error("callback loading state is not visible");
-        if (kind === "card-title" && options.hiddenTitle)
-          throw new Error("callback heading is not visible");
-        if (kind === "other-status")
-          throw new Error("callback status is not visible");
-      },
-    });
+  const makeLocator = (kind: string): AccountReviewLocator => ({
+    boundingBox: async () => {
+      if (kind === "main") return { height: 800, width: 1_000, x: 0, y: 0 };
+      if (!callbackLoadingPresent) return null;
+      return { height: 422, width: 512, x: 0, y: 0 };
+    },
+    count: async () => {
+      if (kind === "loading-card" && !callbackLoadingPresent) return 0;
+      return kind === "card-title" ? (options.titleCount ?? 1) : 1;
+    },
+    first: () => makeLocator(kind),
+    locator: (selector: string) =>
+      makeLocator(selector === "h1" ? "card-title" : "card-body"),
+    // Surrounding whitespace is trimmed before comparison.
+    textContent: async () =>
+      ` ${kind === "card-title" ? card.title : card.body}\n`,
+    waitFor: async () => {
+      if (
+        (kind === "loading-card" ||
+          kind === "loading-status" ||
+          kind === "card-title" ||
+          kind === "card-body") &&
+        !callbackLoadingPresent
+      )
+        throw new Error("callback loading state is not visible");
+      if (kind === "card-title" && options.hiddenTitle)
+        throw new Error("callback heading is not visible");
+      if (kind === "other-status")
+        throw new Error("callback status is not visible");
+    },
+  });
 
-  const page = Object.assign({} as Playwright.Page, {
+  const page: ReviewPage = {
     evaluate: async () => {
       fontReadyCallCount += 1;
       await options.onFontsReady?.();
     },
-    screenshot: async (screenshotOptions: Record<string, unknown>) => {
+    screenshot: async (screenshotOptions) => {
       screenshotCalls.push(screenshotOptions);
       resolveScreenshotStarted();
-      await options.onScreenshot?.();
+      await options.onScreenshot?.(setCallbackLoadingPresent);
       if (options.failScreenshot)
         throw new Error(`screenshot failed for ${url}`);
       return screenshotBuffer;
@@ -165,16 +183,13 @@ const makeFakePage = (
     },
     url: () => currentUrl,
     viewportSize: () => currentViewport,
-  });
+  };
 
   return {
     currentViewport: () => currentViewport,
     fontReadyCalls: () => fontReadyCallCount,
     locatorSelectors,
     page,
-    setCallbackLoadingPresent: (present) => {
-      callbackLoadingPresent = present;
-    },
     setUrl: (nextUrl) => {
       currentUrl = nextUrl;
     },
@@ -215,39 +230,21 @@ const withControlledTimers = async (
   clock: ReturnType<typeof makeControlledClock>,
   operation: (advanceTo: (next: number) => Promise<void>) => Promise<void>
 ): Promise<void> => {
-  const realSetTimeout = globalThis.setTimeout;
-  const realClearTimeout = globalThis.clearTimeout;
-  let nextTimerId = 0;
-  const timers = new Map<
-    number,
-    { readonly callback: () => void; readonly dueAt: number }
-  >();
-  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-    const id = nextTimerId++;
-    timers.set(id, {
-      callback,
-      dueAt: clock.now() + Math.max(0, delay ?? 0),
-    });
-    return id;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {
-    timers.delete(Number(id));
-  }) as typeof clearTimeout;
+  const previousDateNow = Date.now;
+  jest.useFakeTimers({ now: clock.now() });
 
   const advanceTo = async (next: number) => {
+    const elapsed = next - clock.now();
     clock.advanceTo(next);
-    for (const [id, timer] of [...timers]) {
-      if (timer.dueAt > next || !timers.delete(id)) continue;
-      timer.callback();
-      await flushMicrotasks();
-    }
+    jest.advanceTimersByTime(elapsed);
+    await flushMicrotasks();
   };
 
   try {
     await operation(advanceTo);
   } finally {
-    globalThis.setTimeout = realSetTimeout;
-    globalThis.clearTimeout = realClearTimeout;
+    jest.useRealTimers();
+    Date.now = previousDateNow;
   }
 };
 
@@ -263,7 +260,8 @@ type PendingReviewFakePageOptions = {
   readonly unrouteError?: Error;
 };
 
-type PendingReviewFakePage = FakePage & {
+type PendingReviewFakePage = Omit<FakePage, "page"> & {
+  readonly page: PendingReviewPage;
   readonly continueArguments: readonly unknown[][];
   readonly continueCallCount: () => number;
   readonly continueComplete: Promise<void>;
@@ -290,37 +288,25 @@ const makePendingReviewFakePage = (
   options: PendingReviewFakePageOptions = {}
 ): PendingReviewFakePage => {
   const events: string[] = [];
-  let resolveCaptureComplete!: () => void;
-  const captureComplete = new Promise<void>((resolve) => {
-    resolveCaptureComplete = resolve;
-  });
-  let resolveContinueComplete!: () => void;
-  const continueComplete = new Promise<void>((resolve) => {
-    resolveContinueComplete = resolve;
-  });
-  let resolveRestoreComplete!: () => void;
-  const restoreComplete = new Promise<void>((resolve) => {
-    resolveRestoreComplete = resolve;
-  });
-  let releaseRestorePromise!: () => void;
+  const { promise: captureComplete, resolve: resolveCaptureComplete } =
+    Promise.withResolvers<void>();
+  const { promise: continueComplete, resolve: resolveContinueComplete } =
+    Promise.withResolvers<void>();
+  const { promise: restoreComplete, resolve: resolveRestoreComplete } =
+    Promise.withResolvers<void>();
   let restoreReleased = !options.deferRestore;
-  const restoreReady = new Promise<void>((resolve) => {
-    releaseRestorePromise = resolve;
-  });
+  const { promise: restoreReady, resolve: releaseRestorePromise } =
+    Promise.withResolvers<void>();
   const releaseRestore = () => {
     if (restoreReleased) return;
     restoreReleased = true;
     releaseRestorePromise();
   };
-  let resolveRoute!: () => void;
   let routeReleased = !options.deferRoute;
-  const routeReady = new Promise<void>((resolve) => {
-    resolveRoute = resolve;
-  });
-  let resolveRouteStarted!: () => void;
-  const routeStarted = new Promise<void>((resolve) => {
-    resolveRouteStarted = resolve;
-  });
+  const { promise: routeReady, resolve: resolveRoute } =
+    Promise.withResolvers<void>();
+  const { promise: routeStarted, resolve: resolveRouteStarted } =
+    Promise.withResolvers<void>();
   const fakePage = makeFakePage(`${baseUrl}/en-US/auth/sign-in`, {
     failScreenshot: options.failScreenshot,
     onFontsReady: () => {
@@ -353,18 +339,16 @@ const makePendingReviewFakePage = (
   const unrouteArguments: unknown[][] = [];
   let continueCallCount = 0;
   let unrouteCallCount = 0;
-  let routeHandler: Parameters<Playwright.Page["route"]>[1] | undefined;
-  let releaseContinuePromise!: () => void;
+  let routeHandler: PendingRouteHandler | undefined;
   let continueReleased = !options.deferContinue;
-  const continueReady = new Promise<void>((resolve) => {
-    releaseContinuePromise = resolve;
-  });
+  const { promise: continueReady, resolve: releaseContinuePromise } =
+    Promise.withResolvers<void>();
   const releaseContinue = () => {
     if (continueReleased) return;
     continueReleased = true;
     releaseContinuePromise();
   };
-  const route = Object.assign({} as Playwright.Route, {
+  const route: Parameters<PendingRouteHandler>[0] = {
     continue: async (...args: unknown[]) => {
       continueCallCount += 1;
       continueArguments.push(args);
@@ -374,26 +358,26 @@ const makePendingReviewFakePage = (
       resolveContinueComplete();
       if (options.continueError) throw options.continueError;
     },
-  });
-  const request = Object.assign({} as Playwright.Request, {
+  };
+  const request: Parameters<PendingRouteHandler>[1] = {
     method: () => "POST",
-  });
-  const page = Object.assign(fakePage.page, {
-    locator: () =>
-      Object.assign({} as Playwright.Locator, {
-        waitFor: async (waitOptions: { readonly timeout?: number }) => {
-          pendingWaitTimeouts.push(waitOptions.timeout ?? -1);
-          if (options.advancePendingTo !== undefined)
-            clock.advanceTo(options.advancePendingTo);
-        },
-      }),
-    route: async (
-      url: unknown,
-      handler: Parameters<Playwright.Page["route"]>[1],
-      routeOptions?: { readonly times?: number }
-    ) => {
+  };
+  const page: PendingReviewPage = {
+    ...fakePage.page,
+    locator: (selector) =>
+      selector === "#account-sign-in-submit[aria-busy=true]"
+        ? {
+            ...fakePage.page.locator(selector),
+            waitFor: async (waitOptions: { readonly timeout?: number }) => {
+              pendingWaitTimeouts.push(waitOptions.timeout ?? -1);
+              if (options.advancePendingTo !== undefined)
+                clock.advanceTo(options.advancePendingTo);
+            },
+          }
+        : fakePage.page.locator(selector),
+    route: async (url, handler, routeOptions) => {
       events.push("route-install");
-      routeCalls.push({ times: routeOptions?.times, url: String(url) });
+      routeCalls.push({ times: routeOptions.times, url });
       routeInstallArguments.push([url, handler]);
       routeHandler = handler;
       resolveRouteStarted();
@@ -407,7 +391,7 @@ const makePendingReviewFakePage = (
         routeHandler = undefined;
       if (options.unrouteError) throw options.unrouteError;
     },
-  });
+  };
 
   return {
     ...fakePage,
@@ -671,10 +655,11 @@ describe("account review screenshot capture", () => {
       failure = cause;
     }
 
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toBe(captureFailureMessage);
-    expect((failure as Error).message).not.toContain(unsafeUrl);
-    expect((failure as Error).message).not.toContain("synthetic-secret-token");
+    if (!(failure instanceof Error))
+      throw new Error("Expected a capture error");
+    expect(failure.message).toBe(captureFailureMessage);
+    expect(failure.message).not.toContain(unsafeUrl);
+    expect(failure.message).not.toContain("synthetic-secret-token");
     expect(writeFileSpy?.mock.calls).toHaveLength(0);
   });
 
@@ -1018,14 +1003,12 @@ describe("account review screenshot capture", () => {
 
     try {
       for (const phase of ["viewport", "fonts"] as const) {
-        let resolvePreparation!: () => void;
-        const preparation = new Promise<void>((resolve) => {
-          resolvePreparation = resolve;
-        });
-        let resolvePreparationStarted!: () => void;
-        const preparationStarted = new Promise<void>((resolve) => {
-          resolvePreparationStarted = resolve;
-        });
+        const { promise: preparation, resolve: resolvePreparation } =
+          Promise.withResolvers<void>();
+        const {
+          promise: preparationStarted,
+          resolve: resolvePreparationStarted,
+        } = Promise.withResolvers<void>();
         const fakePage = makeFakePage(`${baseUrl}/en-US/account/profile`, {
           onFontsReady: () => {
             if (phase !== "fonts") return;
@@ -1067,10 +1050,8 @@ describe("account review screenshot capture", () => {
   });
 
   test("discards a screenshot that resolves after cancellation and URL change", async () => {
-    let resolveScreenshot!: () => void;
-    const screenshotReady = new Promise<void>((resolve) => {
-      resolveScreenshot = resolve;
-    });
+    const { promise: screenshotReady, resolve: resolveScreenshot } =
+      Promise.withResolvers<void>();
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandledRejections.push(reason);
@@ -1106,10 +1087,8 @@ describe("account review screenshot capture", () => {
 
   test("discards a screenshot that resolves after its deadline", async () => {
     const clock = makeControlledClock();
-    let resolveScreenshot!: () => void;
-    const screenshotReady = new Promise<void>((resolve) => {
-      resolveScreenshot = resolve;
-    });
+    const { promise: screenshotReady, resolve: resolveScreenshot } =
+      Promise.withResolvers<void>();
 
     await withControlledDateNow(clock, async () => {
       await withControlledTimers(clock, async (advanceTo) => {
@@ -1323,11 +1302,8 @@ describe("account review screenshot capture", () => {
   });
 
   test("does not write when the callback loading status is removed after capture", async () => {
-    let fakePage!: FakePage;
-    fakePage = makeFakePage(`${baseUrl}/en-US/auth/callback`, {
-      onScreenshot: () => {
-        fakePage.setCallbackLoadingPresent(false);
-      },
+    const fakePage = makeFakePage(`${baseUrl}/en-US/auth/callback`, {
+      onScreenshot: (setLoadingPresent) => setLoadingPresent(false),
     });
 
     expect(

@@ -1,33 +1,30 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { Effect } from "effect";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { m } from "@/features/i18n";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import type {
-  WorkspaceE2EReservationHistoryFailureKind,
-  WorkspaceE2EReservationHistorySubstage,
+import { reservationAccessGrantIdSchema } from "@/features/reservation-access/reservation-access";
+import { WorkspaceE2EError } from "../errors";
+import {
+  makeWorkspaceE2EReservationHistoryUrls,
+  type ReservationHistoryLocator,
+  type ReservationHistoryPage,
+  toWorkspaceE2EReservationHistoryFailure,
+  verifyReservationHistoryNavigation,
+  type WorkspaceE2EReservationHistoryFailureKind,
+  type WorkspaceE2EReservationHistorySubstage,
 } from "./reservation-navigation";
 
-type FakeLocator = {
-  readonly click: () => Promise<void>;
+interface FixtureLocator extends ReservationHistoryLocator<FixtureLocator> {
   readonly count: () => Promise<number>;
-  readonly getByRole: (role: string, options?: unknown) => FakeLocator;
-  readonly getByText: (text: string, options?: unknown) => FakeLocator;
-  readonly locator: (selector: string) => FakeLocator;
-};
+}
 
-const fakePlaywrightExpect = (locator: FakeLocator) => ({
+const expectFixtureLocator = (locator: FixtureLocator) => ({
   toBeVisible: async () => expect(await locator.count()).toBe(1),
   toHaveCount: async (count: number) =>
     expect(await locator.count()).toBe(count),
 });
-
-mock.module("@playwright/test", () => ({ expect: fakePlaywrightExpect }));
-
-const {
-  makeWorkspaceE2EReservationHistoryUrls,
-  toWorkspaceE2EReservationHistoryFailure,
-  verifyWorkspaceE2EReservationHistoryNavigation,
-} = await import("./reservation-navigation");
 
 type NavigationHarnessOptions = {
   readonly accessReturnPresentation?: "modal" | "page";
@@ -81,6 +78,7 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
   type NavigationMode =
     | "account"
     | "access-invalid"
+    | "access-modal"
     | "access-unavailable"
     | "modal"
     | "not-found"
@@ -103,7 +101,13 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
       },
     ];
     let historyIndex = 0;
-    const current = () => history[historyIndex]!;
+    const current = () => {
+      const entry = history[historyIndex];
+      if (entry === undefined) {
+        throw new Error("Reservation history fixture index is out of range");
+      }
+      return entry;
+    };
     let backgroundOrigin = current().backgroundOrigin;
     const syncBackgroundOrigin = () => {
       backgroundOrigin = current().backgroundOrigin;
@@ -140,10 +144,6 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
       {},
       { locale: "en-US" }
     );
-    const nameFromOptions = (options: unknown) =>
-      typeof options === "object" && options !== null && "name" in options
-        ? String((options as { readonly name?: unknown }).name)
-        : "";
     const countFor = (scope: NavigationScope, query: NavigationQuery) => {
       const mode = current().mode;
       const accountBackgroundMounted =
@@ -220,7 +220,7 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
     const makeLocator = (
       scope: NavigationScope,
       query: NavigationQuery
-    ): FakeLocator => ({
+    ): FixtureLocator => ({
       click: () =>
         runNavigationOperation(async () => {
           if (query === "history-link") {
@@ -291,8 +291,8 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
       getByRole: (role, roleOptions) => {
         if (role === "dialog") return makeLocator("dialog", "dialog");
         if (role === "main") return makeLocator("main", "main");
+        const name = String(roleOptions?.name ?? "");
         if (role === "link") {
-          const name = nameFromOptions(roleOptions);
           if (name === "Access instructions") {
             return makeLocator(
               scope,
@@ -307,13 +307,9 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
           }
         }
         if (role === "button") {
-          return makeLocator(
-            scope,
-            nameFromOptions(roleOptions) === "Close" ? "close" : "none"
-          );
+          return makeLocator(scope, name === "Close" ? "close" : "none");
         }
         if (role === "heading") {
-          const name = nameFromOptions(roleOptions);
           let headingQuery: NavigationQuery = "none";
           if (name === notFoundTitle) headingQuery = "not-found-heading";
           else if (name === reservationSignInTitle)
@@ -340,27 +336,19 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
         return makeLocator(scope, "none");
       },
     });
-    const page = makeLocator("page", "none") as FakeLocator & {
-      readonly goBack: () => Promise<void>;
-      readonly goForward: () => Promise<void>;
-      readonly goto: (
-        url: string
-      ) => Promise<{ readonly status: () => number }>;
-      readonly reload: () => Promise<void>;
-      readonly url: () => string;
-      readonly waitForFunction: (...args: readonly unknown[]) => Promise<void>;
-      readonly waitForURL: (...args: readonly unknown[]) => Promise<void>;
-    };
-    Object.assign(page, {
+    return {
+      ...makeLocator("page", "none"),
       goBack: () =>
         runNavigationOperation(async () => {
           historyIndex -= 1;
           syncBackgroundOrigin();
+          return null;
         }),
       goForward: () =>
         runNavigationOperation(async () => {
           historyIndex += 1;
           syncBackgroundOrigin();
+          return null;
         }),
       goto: (url: string) =>
         runNavigationOperation(async () => {
@@ -410,11 +398,11 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
             url,
           };
           syncBackgroundOrigin();
+          return null;
         }),
       url: () => current().url,
-      waitForFunction: (...args: readonly unknown[]) =>
+      waitForFunction: (_predicate, statusPath) =>
         runNavigationOperation(async () => {
-          const statusPath = args[1];
           if (statusPath === urls.statusPath)
             failFor(
               historyIndex === 1 && current().mode === "account"
@@ -426,8 +414,7 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
         runNavigationOperation(async () => {
           failFor("history-open-url");
         }),
-    });
-    return page;
+    } satisfies ReservationHistoryPage<FixtureLocator>;
   };
 
   const page = makePage();
@@ -435,14 +422,9 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
     newContext: async () => {
       const privatePage = makePage(true);
       return {
+        addCookies: async () => undefined,
         close: async () => undefined,
         newPage: async () => privatePage,
-        request: {
-          get: async () => ({
-            dispose: async () => undefined,
-            ok: () => true,
-          }),
-        },
       };
     },
   };
@@ -458,47 +440,50 @@ const makeNavigationHarness = (options: NavigationHarnessOptions = {}) => {
   };
 };
 
-type MappedNavigationFailure = {
-  readonly cause?: unknown;
-  readonly message: string;
-  readonly operation: string;
-};
+const runVerifier = (harness: ReturnType<typeof makeNavigationHarness>) =>
+  verifyReservationHistoryNavigation(
+    {
+      baseUrl: "https://workspace.example.test",
+      browser: harness.browser,
+      bypassSecret: undefined,
+      captureStatusReview: async () => undefined,
+      fixture: {
+        accessGrantId: reservationAccessGrantIdSchema.make("grant"),
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          "dotypos-reservation"
+        ),
+        paymentAttemptId: paymentAttemptIdSchema.make("payment"),
+        reservationId: harness.reservationId,
+      },
+      page: harness.page,
+    },
+    expectFixtureLocator
+  );
 
 const runMappedVerifierFailure = async (options: NavigationHarnessOptions) => {
   const harness = makeNavigationHarness(options);
   const failure = await Effect.runPromise(
     Effect.tryPromise({
       catch: toWorkspaceE2EReservationHistoryFailure,
-      try: () =>
-        verifyWorkspaceE2EReservationHistoryNavigation({
-          baseUrl: "https://workspace.example.test",
-          browser: harness.browser as never,
-          bypassSecret: undefined,
-          captureStatusReview: async () => undefined,
-          fixture: {
-            accessGrantId: "grant",
-            dotyposReservationId: "dotypos-reservation",
-            paymentAttemptId: "payment",
-            reservationId: harness.reservationId,
-          },
-          page: harness.page as never,
-        }),
+      try: () => runVerifier(harness),
     })
   ).then(
     () => {
       throw new Error("expected reservation history verification to fail");
     },
-    (cause) => cause
+    (cause: unknown) => cause
   );
   await harness.waitForNavigationOperations();
-  return {
-    failure: failure as MappedNavigationFailure,
-    harness,
-  };
+  if (!(failure instanceof WorkspaceE2EError)) {
+    throw new Error("Expected a mapped reservation history failure", {
+      cause: failure,
+    });
+  }
+  return { failure, harness };
 };
 
 const assertMappedVerifierFailure = (
-  failure: MappedNavigationFailure,
+  failure: WorkspaceE2EError,
   stage: WorkspaceE2EReservationHistorySubstage,
   kind: WorkspaceE2EReservationHistoryFailureKind,
   marker: string
@@ -517,21 +502,6 @@ const assertMappedVerifierFailure = (
 };
 
 test("rejects an access-origin modal and accepts the canonical page", async () => {
-  const runVerifier = (harness: ReturnType<typeof makeNavigationHarness>) =>
-    verifyWorkspaceE2EReservationHistoryNavigation({
-      baseUrl: "https://workspace.example.test",
-      browser: harness.browser as never,
-      bypassSecret: undefined,
-      captureStatusReview: async () => undefined,
-      fixture: {
-        accessGrantId: "grant",
-        dotyposReservationId: "dotypos-reservation",
-        paymentAttemptId: "payment",
-        reservationId: harness.reservationId,
-      },
-      page: harness.page as never,
-    });
-
   const canonicalPage = makeNavigationHarness();
   await expect(runVerifier(canonicalPage)).resolves.toBeUndefined();
 

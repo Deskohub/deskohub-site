@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type * as Playwright from "@playwright/test";
+import { Predicate } from "effect";
 import {
   getAuthCallbackPath,
   signInAttemptParam,
   signInCallbackReturnParam,
 } from "@/features/account/routes";
 import { workspaceE2ETimeouts } from "../timeouts";
-import { holdsVirtualAuthenticator } from "../virtual-authenticator";
 import {
   type CallbackLanding,
   expectedCallbackReturnValue,
@@ -70,6 +70,42 @@ export type CallbackDocumentReview = {
 type BoundedOptions = {
   readonly deadline: number;
   readonly signal?: AbortSignal;
+};
+
+type CallbackDocumentEvent =
+  | "Runtime.executionContextCreated"
+  | "Runtime.executionContextDestroyed"
+  | "Runtime.executionContextsCleared"
+  | "Runtime.bindingCalled";
+
+type CallbackDocumentListener = (event: unknown) => void;
+
+type CallbackDocumentSession = {
+  send(method: "Runtime.enable" | "Page.getFrameTree"): Promise<unknown>;
+  send(
+    method: "Runtime.addBinding" | "Runtime.removeBinding",
+    params: { name: string }
+  ): Promise<unknown>;
+  send(
+    method: "Page.captureScreenshot",
+    params: {
+      format: "png";
+      captureBeyondViewport: boolean;
+      fromSurface: boolean;
+    }
+  ): Promise<unknown>;
+  on(event: CallbackDocumentEvent, handler: CallbackDocumentListener): void;
+  off(event: CallbackDocumentEvent, handler: CallbackDocumentListener): void;
+  detach(): Promise<void>;
+};
+
+type CallbackDocumentPage = Pick<
+  Playwright.Page,
+  "url" | "viewportSize" | "setViewportSize"
+> & {
+  addInitScript(source: string): Promise<unknown>;
+  openSession(): Promise<CallbackDocumentSession>;
+  holdsVirtualAuthenticator(): boolean;
 };
 
 const throwIfAborted = (signal: AbortSignal | undefined): void => {
@@ -234,11 +270,11 @@ export const collectCallbackDocumentSnapshot = (config: {
     metric: string
   ): void => {
     const nodes = card.querySelectorAll(selector);
-    if (nodes.length !== 1) {
+    const node = nodes[0];
+    if (nodes.length !== 1 || !node) {
       fail(`${metric}Count`);
       return;
     }
-    const node = nodes[0]!;
     if (node.textContent?.trim() !== text) fail(metric);
     if (hiddenByAriaAncestor(node) || !isRendered(node))
       fail(`${metric}Visible`);
@@ -297,10 +333,10 @@ export const collectCallbackDocumentSnapshot = (config: {
   if (!urlGrammarValid(location.href)) fail("url");
 
   const cards = document.querySelectorAll(config.loadingSelector);
-  if (cards.length !== 1) {
+  const card = cards[0];
+  if (cards.length !== 1 || !card) {
     fail("cards");
   } else {
-    const card = cards[0]!;
     if (card.getAttribute("role") !== "status") fail("role");
     if (card.getAttribute("aria-busy") !== "true") fail("busy");
     if (card.getAttribute("aria-label") !== config.loadingAriaLabel)
@@ -340,15 +376,26 @@ const isPayloadValidTrue = (payload: string): boolean => {
   try {
     const parsed: unknown = JSON.parse(payload);
     return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed) &&
-      Object.keys(parsed as Record<string, unknown>).length === 1 &&
-      (parsed as Record<string, unknown>).v === true
+      Predicate.isObject(parsed) &&
+      Object.keys(parsed).length === 1 &&
+      Object.hasOwn(parsed, "v") &&
+      parsed.v === true
     );
   } catch {
     return false;
   }
+};
+
+const readMainFrameId = (frameTreeResult: unknown): string => {
+  if (
+    !Predicate.isObject(frameTreeResult) ||
+    !Predicate.isObject(frameTreeResult.frameTree) ||
+    !Predicate.isObject(frameTreeResult.frameTree.frame) ||
+    typeof frameTreeResult.frameTree.frame.id !== "string"
+  ) {
+    throw callbackDocumentReviewFailure();
+  }
+  return frameTreeResult.frameTree.frame.id;
 };
 
 /**
@@ -359,7 +406,7 @@ const isPayloadValidTrue = (payload: string): boolean => {
  * viewport checks, and `capture` fails closed.
  */
 export const prepareCallbackDocumentReview = async (
-  page: Playwright.Page,
+  page: CallbackDocumentPage,
   baseOrigin: string,
   landing: CallbackLanding,
   viewport: Playwright.ViewportSize | null,
@@ -391,7 +438,7 @@ export const prepareCallbackDocumentReview = async (
   // acquisition still release everything that was actually taken. Release
   // flags make cleanup idempotent while still allowing a later cleanup pass
   // (a late-settling acquisition) to release new resources.
-  let cdpSession: Playwright.CDPSession | undefined;
+  let ownedSession: CallbackDocumentSession | undefined;
   let bindingAdded = false;
   let viewportOwed = false;
   let listenersRemoved = false;
@@ -421,7 +468,8 @@ export const prepareCallbackDocumentReview = async (
 
   const cleanup = async (): Promise<void> => {
     let failed = false;
-    if (cdpSession) {
+    const session = ownedSession;
+    if (session) {
       if (!listenersRemoved) {
         for (const removeListener of removeCdpListeners) removeListener();
         listenersRemoved = true;
@@ -430,8 +478,7 @@ export const prepareCallbackDocumentReview = async (
         bindingRemoved = true;
         try {
           await runBounded(
-            () =>
-              cdpSession!.send("Runtime.removeBinding", { name: bindingName }),
+            () => session.send("Runtime.removeBinding", { name: bindingName }),
             cleanupDeadline()
           );
         } catch {
@@ -440,10 +487,10 @@ export const prepareCallbackDocumentReview = async (
       }
       // Detaching would also drop a passkey authenticator the lane added to
       // this page, so the session then ends with the page instead.
-      if (!sessionDetached && !holdsVirtualAuthenticator(page)) {
+      if (!sessionDetached && !page.holdsVirtualAuthenticator()) {
         sessionDetached = true;
         try {
-          await runBounded(() => cdpSession!.detach(), cleanupDeadline());
+          await runBounded(() => session.detach(), cleanupDeadline());
         } catch {
           failed = true;
         }
@@ -516,27 +563,26 @@ export const prepareCallbackDocumentReview = async (
       );
     }
 
-    cdpSession = await acquire(
-      () => page.context().newCDPSession(page),
+    const session = await acquire(
+      () => page.openSession(),
       (session) => {
-        cdpSession = session;
+        ownedSession = session;
       }
     );
 
     await acquire(
-      () => cdpSession!.send("Runtime.enable"),
+      () => session.send("Runtime.enable"),
       () => undefined
     );
 
-    // Inferred protocol type: { frameTree: { frame: { id: string } } }.
     const frameTree = await acquire(
-      () => cdpSession!.send("Page.getFrameTree"),
+      () => session.send("Page.getFrameTree"),
       () => undefined
     );
-    const mainFrameId = frameTree.frameTree.frame.id;
+    const mainFrameId = readMainFrameId(frameTree);
 
     await acquire(
-      () => cdpSession!.send("Runtime.addBinding", { name: bindingName }),
+      () => session.send("Runtime.addBinding", { name: bindingName }),
       () => {
         // Ownership is recorded on fulfillment even on the late path, so
         // cleanup removes a binding that landed after its window failed.
@@ -544,26 +590,17 @@ export const prepareCallbackDocumentReview = async (
       }
     );
 
-    const isMainDefaultContext = (description: {
-      auxData?: { [key: string]: string };
-    }): boolean => {
-      // auxData is typed as a loose string index signature while the runtime
-      // value of isDefault is boolean; narrow through unknown rather than
-      // asserting a response shape.
-      const auxData: unknown = description.auxData;
-      const isDefault = (auxData as { isDefault?: unknown } | undefined)
-        ?.isDefault;
-      return description.auxData?.frameId === mainFrameId && isDefault === true;
-    };
-
-    const onExecutionContextCreated = (event: {
-      context: {
-        id: number;
-        origin: string;
-        auxData?: { [key: string]: string };
-      };
-    }): void => {
-      if (!isMainDefaultContext(event.context)) return;
+    const onExecutionContextCreated = (event: unknown): void => {
+      if (!Predicate.isObject(event) || !Predicate.isObject(event.context))
+        return;
+      const { auxData, id, origin } = event.context;
+      if (
+        !Predicate.isObject(auxData) ||
+        auxData.frameId !== mainFrameId ||
+        auxData.isDefault !== true
+      ) {
+        return;
+      }
       // Any root main-default replacement — same URL included — first
       // invalidates all previous evidence and advances the generation.
       invalidateReceipt();
@@ -571,17 +608,18 @@ export const prepareCallbackDocumentReview = async (
       // Only then may the id be admitted, and only when the context origin
       // exactly equals the normalized base origin; foreign and opaque
       // origins cannot provide a receipt.
-      if (event.context.origin !== baseOriginValid) {
-        currentMainContextId = undefined;
-        return;
-      }
-      currentMainContextId = event.context.id;
+      currentMainContextId =
+        origin === baseOriginValid && typeof id === "number" ? id : undefined;
     };
 
-    const onExecutionContextDestroyed = (event: {
-      executionContextId: number;
-    }): void => {
-      if (event.executionContextId !== currentMainContextId) return;
+    const onExecutionContextDestroyed = (event: unknown): void => {
+      if (
+        !Predicate.isObject(event) ||
+        typeof event.executionContextId !== "number" ||
+        event.executionContextId !== currentMainContextId
+      ) {
+        return;
+      }
       currentMainContextId = undefined;
       invalidateReceipt();
       documentGeneration += 1;
@@ -593,49 +631,44 @@ export const prepareCallbackDocumentReview = async (
       documentGeneration += 1;
     };
 
-    const onBindingCalled = (event: {
-      name: string;
-      payload: string;
-      executionContextId: number;
-    }): void => {
+    const onBindingCalled = (event: unknown): void => {
       // Only the current main default context may deliver evidence; foreign,
       // subframe, or stale-context events are ignored so they can never
       // create or overwrite a valid receipt.
-      if (event.name !== bindingName) return;
+      if (!Predicate.isObject(event) || event.name !== bindingName) return;
+      if (typeof event.executionContextId !== "number") return;
       if (event.executionContextId !== currentMainContextId) return;
-      receiptValid = isPayloadValidTrue(event.payload);
+      receiptValid =
+        typeof event.payload === "string" && isPayloadValidTrue(event.payload);
     };
 
-    cdpSession.on("Runtime.executionContextCreated", onExecutionContextCreated);
-    cdpSession.on(
+    session.on("Runtime.executionContextCreated", onExecutionContextCreated);
+    session.on(
       "Runtime.executionContextDestroyed",
       onExecutionContextDestroyed
     );
-    cdpSession.on(
-      "Runtime.executionContextsCleared",
-      onExecutionContextsCleared
-    );
-    cdpSession.on("Runtime.bindingCalled", onBindingCalled);
+    session.on("Runtime.executionContextsCleared", onExecutionContextsCleared);
+    session.on("Runtime.bindingCalled", onBindingCalled);
     removeCdpListeners.push(
       () =>
-        cdpSession?.off(
+        session.off(
           "Runtime.executionContextCreated",
           onExecutionContextCreated
         ),
       () =>
-        cdpSession?.off(
+        session.off(
           "Runtime.executionContextDestroyed",
           onExecutionContextDestroyed
         ),
       () =>
-        cdpSession?.off(
+        session.off(
           "Runtime.executionContextsCleared",
           onExecutionContextsCleared
         ),
-      () => cdpSession?.off("Runtime.bindingCalled", onBindingCalled)
+      () => session.off("Runtime.bindingCalled", onBindingCalled)
     );
 
-    // Page-lifetime (Playwright cannot remove init scripts): the listener is
+    // The init script lives with the page. Its listener is
     // passive and turns fully inert once the binding is removed, because it
     // checks the binding before every use. Strictly observational.
     await acquire(
@@ -710,7 +743,7 @@ export const prepareCallbackDocumentReview = async (
         captureConsumed = true;
         const screenshot = await runBounded(
           () =>
-            cdpSession!.send("Page.captureScreenshot", {
+            session.send("Page.captureScreenshot", {
               format: "png",
               captureBeyondViewport: true,
               fromSurface: true,
@@ -729,6 +762,11 @@ export const prepareCallbackDocumentReview = async (
         ) {
           throw callbackDocumentReviewFailure();
         }
+        if (
+          !Predicate.isObject(screenshot) ||
+          typeof screenshot.data !== "string"
+        )
+          throw callbackDocumentReviewFailure();
         const buffer = Buffer.from(screenshot.data, "base64");
         if (buffer.byteLength === 0) throw callbackDocumentReviewFailure();
         return buffer;
