@@ -1,10 +1,13 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposDiscountGroupIdSchema,
-  type Reservation,
+  type DotyposReservation,
+  DotyposReservationSchema,
+  type DotyposTable,
+  DotyposTableSchema,
 } from "@deskohub/dotypos";
-import type { Table } from "@deskohub/dotypos/generated";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import {
   workspaceProductMonitorOptions,
@@ -32,6 +35,7 @@ import { meetingRoomE2EDurations } from "./cases/meeting-room";
 import { getDatasourceConfig, type WorkspaceE2EConfig } from "./config";
 import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import { workspaceE2EReferralCheckoutCaseIds } from "./referrals/plan";
+import { makeE2ETelemetryMock } from "./services/telemetry.mock";
 import { workspaceE2ETimeouts } from "./timeouts";
 
 afterEach(() => setSystemTime());
@@ -117,7 +121,9 @@ test("wires the case-plan per-date maximums through the real case builders", asy
       flowStates: [],
       preparation,
       traceConstruction: false,
-    }).pipe(Effect.provide(httpClientLayer))
+    }).pipe(
+      Effect.provide(Layer.mergeAll(httpClientLayer, makeE2ETelemetryMock([])))
+    )
   );
 
   expect(cases.length).toBeGreaterThan(0);
@@ -160,14 +166,10 @@ test("prepares the transient calendar pool with the bare reserved-desk product",
   // The bulk open-space selection packs 20 dates at 4/date and the calendar
   // sale takes the next 4 at 1/date, so the transient selections land on
   // these later weekdays.
-  const bareReservedDeskDates = [
-    allocatedWeekdays[9],
-    allocatedWeekdays[10],
-  ] as const;
-  const monitorTaggedDates = [
-    allocatedWeekdays[11],
-    allocatedWeekdays[12],
-  ] as const;
+  const bareReservedDeskDates = allocatedWeekdays.slice(9, 11);
+  const monitorTaggedDates = allocatedWeekdays.slice(11, 13);
+  assert.equal(bareReservedDeskDates.length, 2);
+  assert.equal(monitorTaggedDates.length, 2);
   const requests: URL[] = [];
   const availableDatesFor = (url: URL): readonly string[] => {
     if (url.searchParams.has("monitorOption")) return monitorTaggedDates;
@@ -176,17 +178,24 @@ test("prepares the transient calendar pool with the bare reserved-desk product",
     }
     return allocatedWeekdays;
   };
-  const fetchMock: typeof globalThis.fetch = async (input) => {
-    const request = input instanceof Request ? input : new Request(input);
-    const url = new URL(request.url);
-    requests.push(url);
-    const wantedDates = availableDatesFor(url);
-    return Response.json({
-      unavailableDates: allocatedWeekdays.filter(
-        (date) => !wantedDates.includes(date)
-      ),
-    });
-  };
+  const fetchMock = Object.assign(
+    async (input: URL | RequestInfo) => {
+      const request = input instanceof Request ? input : new Request(input);
+      const url = new URL(request.url);
+      requests.push(url);
+      const wantedDates = availableDatesFor(url);
+      return Response.json({
+        unavailableDates: allocatedWeekdays.filter(
+          (date) => !wantedDates.includes(date)
+        ),
+      });
+    },
+    {
+      preconnect: () => {
+        throw new Error("Unexpected availability preconnect");
+      },
+    }
+  );
   const httpClientLayer = FetchHttpClient.layer.pipe(
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
   );
@@ -246,7 +255,7 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
     workspaceE2EMaximumSameDateCoworkReservations["open-space"];
   const reservedDeskMaximum =
     workspaceE2EMaximumSameDateCoworkReservations["reserved-desk"];
-  const tables: Table[] = [
+  const tables: DotyposTable[] = [
     makeTable("open-space-table", ["cowork:open-space"], openSpaceMaximum * 8),
     ...Object.entries(workspaceProductMonitorOptionTableTags).map(
       ([monitorOption, tags], index) =>
@@ -271,10 +280,12 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
       display: false,
     }),
   ];
-  const reservations: Reservation[] = [
-    makeReservation("open-space-table", 2),
-    makeReservation("provider-room-id", 1),
-    makeReservation("reserved-desk-table", 1, { status: "CANCELLED" }),
+  const reservations: DotyposReservation[] = [
+    makeReservation("open-space-booking", "open-space-table", 2),
+    makeReservation("meeting-room-booking", "provider-room-id", 1),
+    makeReservation("reserved-desk-booking", "reserved-desk-table", 1, {
+      status: "CANCELLED",
+    }),
   ];
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
@@ -475,8 +486,8 @@ test("does not add reservation usage from non-overlapping dates", () => {
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 5),
-      makeReservation("open-space-table", 5, {
+      makeReservation("first-day-booking", "open-space-table", 5),
+      makeReservation("second-day-booking", "open-space-table", 5, {
         endDate: "2099-08-05T18:00:00+00:00",
         startDate: "2099-08-05T08:00:00+00:00",
       }),
@@ -499,8 +510,8 @@ test("fails when overlapping reservations jointly exhaust run and cleanup headro
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 8),
-      makeReservation("open-space-table", 8, {
+      makeReservation("all-day-booking", "open-space-table", 8),
+      makeReservation("overlapping-booking", "open-space-table", 8, {
         endDate: "2099-08-03T17:00:00+00:00",
         startDate: "2099-08-03T09:00:00+00:00",
       }),
@@ -528,15 +539,15 @@ test("adds no occupancy for out-of-interval and boundary-touching reservations",
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 32, {
+      makeReservation("before-interval-booking", "open-space-table", 32, {
         endDate: "2099-07-28T18:00:00+00:00",
         startDate: "2099-07-28T08:00:00+00:00",
       }),
-      makeReservation("open-space-table", 32, {
+      makeReservation("ending-at-start-booking", "open-space-table", 32, {
         endDate: "2099-08-01T00:00:00+00:00",
         startDate: "2099-07-31T08:00:00+00:00",
       }),
-      makeReservation("open-space-table", 32, {
+      makeReservation("starting-at-end-booking", "open-space-table", 32, {
         endDate: "2099-09-02T08:00:00+00:00",
         startDate: "2099-09-01T00:00:00+00:00",
       }),
@@ -558,7 +569,9 @@ test("ignores cancelled reservations in capacity accounting", () => {
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 32, { status: "CANCELLED" }),
+      makeReservation("cancelled-booking", "open-space-table", 32, {
+        status: "CANCELLED",
+      }),
     ],
     tables: [makeTable("open-space-table", ["cowork:open-space"], 32)],
     to: new Date("2099-09-01T00:00:00.000Z"),
@@ -658,29 +671,33 @@ const makeTable = (
   id: string,
   tags: readonly string[],
   seats: number,
-  overrides: Partial<Table> = {}
-): Table => ({
-  _cloudId: "testing-cloud",
-  display: true,
-  enabled: true,
-  id,
-  name: "Aggregate-only test table",
-  seats: String(seats),
-  tags,
-  ...overrides,
-});
+  overrides: Partial<typeof DotyposTableSchema.Encoded> = {}
+): DotyposTable =>
+  Schema.decodeSync(DotyposTableSchema)({
+    _cloudId: "testing-cloud",
+    display: true,
+    enabled: true,
+    id,
+    name: "Aggregate-only test table",
+    seats: String(seats),
+    tags,
+    ...overrides,
+  });
 
 const makeReservation = (
+  id: string,
   tableId: string,
   seats: number,
-  overrides: Partial<Reservation> = {}
-): Reservation => ({
-  _branchId: "testing-branch",
-  _cloudId: "testing-cloud",
-  _tableId: tableId,
-  endDate: "2099-08-03T18:00:00+00:00",
-  seats: String(seats),
-  startDate: "2099-08-03T08:00:00+00:00",
-  status: "CONFIRMED",
-  ...overrides,
-});
+  overrides: Partial<typeof DotyposReservationSchema.Encoded> = {}
+): DotyposReservation =>
+  Schema.decodeSync(DotyposReservationSchema)({
+    _branchId: "testing-branch",
+    _cloudId: "testing-cloud",
+    _tableId: tableId,
+    endDate: "2099-08-03T18:00:00+00:00",
+    seats: String(seats),
+    startDate: "2099-08-03T08:00:00+00:00",
+    status: "CONFIRMED",
+    ...overrides,
+    id,
+  });

@@ -275,10 +275,21 @@ test("rejects an HTML error document returned by the generated map endpoint", as
 });
 
 const makeFetchHttpClientLayer = (
-  fetchImplementation: typeof globalThis.fetch
+  fetchImplementation: (
+    ...args: Parameters<typeof fetch>
+  ) => ReturnType<typeof fetch>
 ) =>
   FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchImplementation))
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(fetchImplementation, {
+          preconnect: () => {
+            throw new Error("Unexpected preview preconnect");
+          },
+        })
+      )
+    )
   );
 
 const makeConfig = (bypassSecret?: string): WorkspaceE2EConfig => ({

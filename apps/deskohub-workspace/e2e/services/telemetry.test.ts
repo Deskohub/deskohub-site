@@ -13,6 +13,10 @@ import { makeWorkspaceE2EDateAllocation } from "../allocation";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { workspaceE2EError, workspaceE2ETimeoutError } from "../errors";
 import {
+  githubActionsRunIdSchema,
+  workspaceE2ERunIdSchema,
+} from "../run-identifiers";
+import {
   E2ERunContextService,
   E2ETelemetryService,
   makeE2ERunContext,
@@ -26,10 +30,10 @@ describe("E2E run context", () => {
       makeE2ERunContext(makeTestE2EEnvironment(), () => "local-run")
     ).toEqual({
       allocation: makeWorkspaceE2EDateAllocation({
-        runId: "manual-local-run",
+        runId: workspaceE2ERunIdSchema.make("manual-local-run"),
       }),
       executionContext: "manual",
-      runId: "manual-local-run",
+      runId: workspaceE2ERunIdSchema.make("manual-local-run"),
     });
   });
 
@@ -49,14 +53,14 @@ describe("E2E run context", () => {
     ).toEqual({
       allocation: makeWorkspaceE2EDateAllocation({
         prNumber: 124,
-        runId: "12345-2",
+        runId: workspaceE2ERunIdSchema.make("12345-2"),
         shardIndex: 2,
       }),
       executionContext: "ci",
       githubRunAttempt: 2,
-      githubRunId: "12345",
+      githubRunId: githubActionsRunIdSchema.make("12345"),
       prNumber: 124,
-      runId: "12345-2",
+      runId: workspaceE2ERunIdSchema.make("12345-2"),
       targetSha: "a".repeat(40),
     });
   });
@@ -89,13 +93,13 @@ test("builds bounded searchable span attributes", () => {
       {
         allocation: makeWorkspaceE2EDateAllocation({
           prNumber: 120,
-          runId: "987-3",
+          runId: workspaceE2ERunIdSchema.make("987-3"),
         }),
         executionContext: "ci",
         githubRunAttempt: 3,
-        githubRunId: "987",
+        githubRunId: githubActionsRunIdSchema.make("987"),
         prNumber: 120,
-        runId: "987-3",
+        runId: workspaceE2ERunIdSchema.make("987-3"),
         targetSha: "b".repeat(40),
       },
       {
@@ -220,7 +224,7 @@ test("exports only closed failure facts and preserves the original failure", asy
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const telemetry = yield* E2ETelemetryService;
-        yield* telemetry.traceRun(Effect.fail(unsafeFailure));
+        return yield* telemetry.traceRun(Effect.fail(unsafeFailure));
       }).pipe(Effect.provide(layer))
     );
 
@@ -254,7 +258,7 @@ test("exports an allowlisted diagnostic code without raw failure details", async
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const telemetry = yield* E2ETelemetryService;
-        yield* telemetry.traceStep({
+        return yield* telemetry.traceStep({
           caseId: "checkout-cowork-basic",
           effect: Effect.fail(
             workspaceE2EError("unsafe provider failure details", {

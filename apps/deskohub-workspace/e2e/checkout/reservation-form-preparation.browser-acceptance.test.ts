@@ -9,6 +9,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { Schema } from "effect";
@@ -588,6 +589,7 @@ describe("Team Table reservation preparation in Chromium", () => {
     "selects size, date, async start and end times, and checkout invitees",
     async () => {
       const data = makeTableCheckoutData(origin, tableSlot);
+      assert(data.table, "expected table checkout data");
       const html = `
         <form>
           <label><input id="team-table-size-2" name="seats" type="radio" value="2" checked /></label>
@@ -675,7 +677,7 @@ describe("Team Table reservation preparation in Chromium", () => {
       ).toEqual({
         date: "2099-09-02",
         endTime: "12:00",
-        people: data.table?.checkoutInvitees,
+        people: [...data.table.checkoutInvitees],
         seats: "4",
         startTime: "10:00",
       });

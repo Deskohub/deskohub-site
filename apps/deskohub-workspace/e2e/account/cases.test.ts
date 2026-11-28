@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, setSystemTime, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { Customer } from "@deskohub/dotypos/generated";
 import { Effect, Exit, Layer, Option } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -2876,8 +2877,10 @@ test("executes every account lane case within the magic-link ledger", async () =
   // A journal snapshot records the insertion point for the next event, so an
   // equal index still proves it was persisted before the ambiguity navigation.
   expect(duplicateJournal?.eventIndex).toBeLessThanOrEqual(ambiguityEventIndex);
+  const [referralOwner] = scenario.external.referralOwnerSeeds;
+  assert(referralOwner);
   expect(scenario.external.journal.authUserIds).toEqual([
-    scenario.external.referralOwnerSeeds[0]?.accountId,
+    referralOwner.accountId,
     "auth-original",
     "auth-reactivated",
   ]);
@@ -2962,8 +2965,10 @@ test("signs in with an emailed code and keeps every link journey when sign-in co
     "auth-original",
     "auth-reactivated",
   ]);
+  const [referralOwner] = scenario.external.referralOwnerSeeds;
+  assert(referralOwner);
   expect(scenario.external.journal.authUserIds).toEqual([
-    scenario.external.referralOwnerSeeds[0]?.accountId,
+    referralOwner.accountId,
     "auth-accepted-b",
     "auth-original",
     "auth-reactivated",

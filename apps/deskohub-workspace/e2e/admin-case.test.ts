@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -122,7 +123,7 @@ describe("action completion barrier", () => {
       })
     );
 
-    expect(Exit.isFailure(exit)).toBe(true);
+    assert(Exit.isFailure(exit));
     expect(String(Cause.squash(exit.cause))).toContain(
       "replayed access code action response did not settle"
     );

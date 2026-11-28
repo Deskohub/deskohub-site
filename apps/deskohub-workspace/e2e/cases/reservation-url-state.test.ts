@@ -3,6 +3,7 @@ import "@/shared/polyfills/temporal";
 import { Effect } from "effect";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
 import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { getDatasourceConfig, type WorkspaceE2EConfig } from "../config";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import {
@@ -149,17 +150,17 @@ const makeCases = (withOffice: boolean, withTable = withOffice) =>
         office: withOffice
           ? {
               slot: {
-                endsAt: "2099-08-07T22:00:00.000Z",
+                endsAt: instantStringSchema.make("2099-08-07T22:00:00.000Z"),
                 endsOn: "2099-08-07",
                 seats: 2,
-                startsAt: "2099-08-05T22:00:00.000Z",
+                startsAt: instantStringSchema.make("2099-08-05T22:00:00.000Z"),
                 startsOn: "2099-08-06",
               },
               urlStateSlot: {
-                endsAt: "2099-08-13T22:00:00.000Z",
+                endsAt: instantStringSchema.make("2099-08-13T22:00:00.000Z"),
                 endsOn: "2099-08-13",
                 seats: 2,
-                startsAt: "2099-08-11T22:00:00.000Z",
+                startsAt: instantStringSchema.make("2099-08-11T22:00:00.000Z"),
                 startsOn: "2099-08-12",
               },
             }

@@ -5,6 +5,7 @@ import {
   workspaceE2EConcurrentRunTarget,
   workspaceE2EFullDateAllocation,
 } from "./allocation";
+import { workspaceE2ERunIdSchema } from "./run-identifiers";
 
 test("partitions the candidate range into deterministic disjoint shards", () => {
   const allocations = Array.from(
@@ -12,7 +13,7 @@ test("partitions the candidate range into deterministic disjoint shards", () => 
     (_, shardIndex) =>
       makeWorkspaceE2EDateAllocation({
         prNumber: shardIndex + 1,
-        runId: `run-${shardIndex}`,
+        runId: workspaceE2ERunIdSchema.make(`run-${shardIndex}`),
       })
   );
   const candidateDates = Array.from(
@@ -45,9 +46,15 @@ test("partitions the candidate range into deterministic disjoint shards", () => 
   expect(new Set(allocatedDates).size).toBe(allocatedDates.length);
   expect(allocatedDates.toSorted()).toEqual(weekdays);
   expect(
-    makeWorkspaceE2EDateAllocation({ prNumber: 2, runId: "ignored" })
+    makeWorkspaceE2EDateAllocation({
+      prNumber: 2,
+      runId: workspaceE2ERunIdSchema.make("ignored"),
+    })
   ).toEqual(
-    makeWorkspaceE2EDateAllocation({ prNumber: 2, runId: "also-ignored" })
+    makeWorkspaceE2EDateAllocation({
+      prNumber: 2,
+      runId: workspaceE2ERunIdSchema.make("also-ignored"),
+    })
   );
 });
 
@@ -56,8 +63,9 @@ test("spreads runs without a PR number across every shard", () => {
     Array.from(
       { length: 30 },
       (_, index) =>
-        makeWorkspaceE2EDateAllocation({ runId: `manual-run-${index}` })
-          .shardIndex
+        makeWorkspaceE2EDateAllocation({
+          runId: workspaceE2ERunIdSchema.make(`manual-run-${index}`),
+        }).shardIndex
     )
   );
 
@@ -67,12 +75,12 @@ test("spreads runs without a PR number across every shard", () => {
 test("uses coordinated leases to separate colliding PR identities", () => {
   const first = makeWorkspaceE2EDateAllocation({
     prNumber: 100,
-    runId: "first-run",
+    runId: workspaceE2ERunIdSchema.make("first-run"),
     shardIndex: 0,
   });
   const second = makeWorkspaceE2EDateAllocation({
     prNumber: 103,
-    runId: "second-run",
+    runId: workspaceE2ERunIdSchema.make("second-run"),
     shardIndex: 1,
   });
 

@@ -15,7 +15,6 @@ import {
 import {
   formatWorkspaceE2EFailure,
   isWorkspaceE2ETimeout,
-  type WorkspaceE2EError,
   workspaceE2EError,
 } from "./errors";
 import type { PreviewAccessFetch } from "./preview-access";
@@ -53,7 +52,11 @@ beforeAll(async () => {
             `<head><title>Session</title></head><body><button id="popup" onclick="window.open('/popup')">Open</button></body>`
           );
         case "/popup":
-          return html(`<head><title>Popup</title></head><body></body>`);
+          return html(
+            `<head><title>Popup</title></head><body>
+              <button type="button" onclick="console.log('popup checked')">Log from popup</button>
+            </body>`
+          );
         case "/noisy": {
           const count = Number(url.searchParams.get("count"));
           return html(
@@ -116,8 +119,8 @@ const openSession = (options: { readonly recordHar?: boolean } = {}) => {
   });
 };
 
-const withSession = <A>(
-  body: (session: E2EBrowserSession) => Effect.Effect<A, WorkspaceE2EError>,
+const withSession = <A, E>(
+  body: (session: E2EBrowserSession) => Effect.Effect<A, E>,
   options: { readonly recordHar?: boolean } = {}
 ) =>
   Effect.runPromise(Effect.scoped(Effect.flatMap(openSession(options), body)));
@@ -243,7 +246,7 @@ test.skipIf(!chromiumAvailable)(
     expect(await read("network-requests.txt")).toContain("/noisy?count=");
     expect(await read("snapshot-interactive.txt")).toContain("Noisy");
     const har = await read("network.har");
-    expect(JSON.parse(har).log.entries.length).toBeGreaterThan(0);
+    expect(readHar(har).log.entries.length).toBeGreaterThan(0);
     for (const name of await readdir(directory))
       expect(await read(name)).not.toContain(secret);
     expect(afterCapture.message).toBe(
@@ -340,7 +343,7 @@ test.skipIf(!chromiumAvailable)(
       })
     );
     expect(
-      JSON.parse(await readFile(harPath, "utf8")).log.entries.length
+      readHar(await readFile(harPath, "utf8")).log.entries.length
     ).toBeGreaterThan(0);
     expect(shared.message).toBe(
       "The browser session already closed without this HAR"
@@ -397,7 +400,7 @@ test.skipIf(!chromiumAvailable)(
           ]);
           await popup.waitForLoadState();
           // Capture covers pages the app opens, not just the first one.
-          await popup.evaluate(() => console.log("popup checked"));
+          await popup.getByRole("button", { name: "Log from popup" }).click();
           return page;
         });
         const popupUrl = yield* session.use("read the popup", async (page) =>
@@ -417,11 +420,11 @@ test.skipIf(!chromiumAvailable)(
           async (page) => page.url()
         );
         const closedActivation = yield* Effect.flip(session.activate(popup));
-        const { console } = yield* session.diagnostics;
+        const { console: consoleEntries } = yield* session.diagnostics;
         return {
           activatedUrl,
           closedActivation: closedActivation.message,
-          console,
+          console: consoleEntries,
           fallbackUrl,
           popupUrl,
         };
@@ -449,8 +452,8 @@ const toLocalServer: PreviewAccessFetch = (url, init) => {
   return fetch(new URL(`${url.pathname}${url.search}`, origin()), init);
 };
 
-const withPreviewSession = <A>(
-  body: (session: E2EBrowserSession) => Effect.Effect<A, WorkspaceE2EError>
+const withPreviewSession = <A, E>(
+  body: (session: E2EBrowserSession) => Effect.Effect<A, E>
 ) => {
   if (!browser) throw new Error("Chromium is not running");
   return Effect.runPromise(
@@ -912,7 +915,7 @@ test.skipIf(!chromiumAvailable)(
     const settled = await Effect.runPromise(
       Effect.raceFirst(
         Fiber.await(closing).pipe(Effect.as("closed")),
-        Effect.sleep("10 seconds").pipe(Effect.as("stalled"))
+        Effect.sleep("10 seconds").pipe(Effect.as("stalled" as const))
       )
     );
     const openingExit = await Effect.runPromise(Fiber.await(opening));
@@ -997,7 +1000,9 @@ const settleScopeOverStalledClose = async (options: {
       yield* TestClock.adjust("2 seconds");
       const settled = yield* Effect.raceFirst(
         Fiber.await(scoped),
-        Effect.promise(() => Bun.sleep(2000)).pipe(Effect.as("stalled"))
+        Effect.promise(() => Bun.sleep(2000)).pipe(
+          Effect.as("stalled" as const)
+        )
       );
       return {
         settled: settled === "stalled" ? settled : settled._tag,

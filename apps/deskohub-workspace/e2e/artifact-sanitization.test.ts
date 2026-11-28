@@ -1,6 +1,39 @@
 import { expect, test } from "bun:test";
+import { Schema } from "effect";
 import { sanitizeHarArtifact } from "./artifact-sanitization";
 import { addRedaction } from "./redaction";
+
+const harResponse = Schema.Struct({
+  content: Schema.Struct({ text: Schema.String }),
+});
+
+const readRedactedHar = Schema.decodeUnknownSync(
+  Schema.Struct({
+    log: Schema.Struct({
+      entries: Schema.NonEmptyArray(
+        Schema.Struct({
+          comment: Schema.String,
+          request: Schema.Struct({
+            bodySize: Schema.String,
+            headers: Schema.Array(Schema.Unknown),
+            postData: Schema.Unknown,
+            url: Schema.String,
+          }),
+          response: harResponse,
+          time: Schema.String,
+        })
+      ),
+    }),
+  })
+);
+
+const readHarResponses = Schema.decodeUnknownSync(
+  Schema.Struct({
+    log: Schema.Struct({
+      entries: Schema.NonEmptyArray(Schema.Struct({ response: harResponse })),
+    }),
+  })
+);
 
 test("keeps a sanitized HAR valid JSON when a short value is redacted", () => {
   addRedaction("97531", true);
@@ -28,7 +61,7 @@ test("keeps a sanitized HAR valid JSON when a short value is redacted", () => {
       })
     )
   );
-  const [entry] = sanitized.log.entries;
+  const [entry] = readRedactedHar(sanitized).log.entries;
 
   expect(entry.time).toBe("5.[redacted]");
   expect(entry.request.bodySize).toBe("[redacted]");
@@ -48,47 +81,49 @@ test("keeps only the error codes of a failed Nexi hosted-field response", () => 
     request: { headers: [], url },
     response: { content: { text }, headers: [], status },
   });
-  const sanitized = JSON.parse(
-    sanitizeHarArtifact(
-      JSON.stringify({
-        log: {
-          entries: [
-            harEntry(
-              cardDataUrl,
-              400,
-              JSON.stringify({
-                errors: [
-                  { code: "GW0001", description: "Jane Doe is not allowed" },
-                  { code: "298" },
-                  { code: "JANE" },
-                ],
-                event: "JANE",
-                fieldStatus: [
-                  { event: "BUILD_ERROR", id: "CARDHOLDER_NAME" },
-                  { event: "BUILD_ERROR", id: "A1B2C3D4E5F6" },
-                  { event: "1234", id: "CARD_NUMBER" },
-                ],
-                holder: "Jane Doe",
-                pan: 4509,
-                workflowState: "CARD_DATA_COLLECTION",
-              })
-            ),
-            harEntry(cardDataUrl, 400, '"GW0001"'),
-            harEntry(cardDataUrl, 400, '["298", "GW0001"]'),
-            harEntry(cardDataUrl, 400, "<html>Jane Doe</html>"),
-            harEntry(
-              cardDataUrl,
-              200,
-              '{"workflowState":"CARD_DATA_COLLECTION"}'
-            ),
-            harEntry(
-              "https://deskohub.example.test/fe/build/text/",
-              400,
-              '{"errors":[{"code":"GW0001"}]}'
-            ),
-          ],
-        },
-      })
+  const sanitized = readHarResponses(
+    JSON.parse(
+      sanitizeHarArtifact(
+        JSON.stringify({
+          log: {
+            entries: [
+              harEntry(
+                cardDataUrl,
+                400,
+                JSON.stringify({
+                  errors: [
+                    { code: "GW0001", description: "Jane Doe is not allowed" },
+                    { code: "298" },
+                    { code: "JANE" },
+                  ],
+                  event: "JANE",
+                  fieldStatus: [
+                    { event: "BUILD_ERROR", id: "CARDHOLDER_NAME" },
+                    { event: "BUILD_ERROR", id: "A1B2C3D4E5F6" },
+                    { event: "1234", id: "CARD_NUMBER" },
+                  ],
+                  holder: "Jane Doe",
+                  pan: 4509,
+                  workflowState: "CARD_DATA_COLLECTION",
+                })
+              ),
+              harEntry(cardDataUrl, 400, '"GW0001"'),
+              harEntry(cardDataUrl, 400, '["298", "GW0001"]'),
+              harEntry(cardDataUrl, 400, "<html>Jane Doe</html>"),
+              harEntry(
+                cardDataUrl,
+                200,
+                '{"workflowState":"CARD_DATA_COLLECTION"}'
+              ),
+              harEntry(
+                "https://deskohub.example.test/fe/build/text/",
+                400,
+                '{"errors":[{"code":"GW0001"}]}'
+              ),
+            ],
+          },
+        })
+      )
     )
   );
   const [nexiFailure, ...redactedEntries] = sanitized.log.entries;

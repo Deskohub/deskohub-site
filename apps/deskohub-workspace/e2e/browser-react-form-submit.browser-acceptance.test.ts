@@ -26,7 +26,10 @@ const readyAttribute = { name: "data-ready", value: `it's "ready"` } as const;
 // never becomes ready ends the wait quickly.
 const notReadyAfterMs = 300;
 
-const contactForm = (fields: string, readyValue = readyAttribute.value) =>
+const contactForm = (
+  fields: string,
+  readyValue: string = readyAttribute.value
+) =>
   `<form data-testid='contact "form"' data-ready='${readyValue.replaceAll("'", "&#39;")}'>${fields}</form>`;
 
 const wiredFields = `

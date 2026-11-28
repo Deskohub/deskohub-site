@@ -897,7 +897,7 @@ const assertAnonymousLegalRoute = async (
   }
 };
 
-const isSignInPathname = (url: string) =>
+const isSignInPathname = (url: string | URL) =>
   /\/auth\/sign-in\/?$/.test(new URL(url).pathname);
 
 /** Opens an account path, recording every request on the way to sign-in. */

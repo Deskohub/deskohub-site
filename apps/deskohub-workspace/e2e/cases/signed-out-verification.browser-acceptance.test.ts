@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { join } from "node:path";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { Effect } from "effect";
@@ -131,7 +132,9 @@ const signInCodeBundle = async () => {
     format: "iife",
     target: "browser",
   });
-  return outputs[0].text();
+  const [bundle] = outputs;
+  assert(bundle, "expected a browser bundle");
+  return bundle.text();
 };
 
 const withVerificationPage = <A, E>(

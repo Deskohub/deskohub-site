@@ -46,6 +46,9 @@ const renderReferrals = (input: {
       <ReferralScreen
         locale={locale}
         referrals={{
+          discountPerInvitee: "5",
+          invitationDiscount: "15",
+          savingsCurrency: "CZK",
           summary: {
             code,
             inviteeCount: input.total,

@@ -17,7 +17,7 @@ import {
 } from "./config";
 
 const runId = (value: string): WorkspaceE2ERunId =>
-  Schema.decodeUnknownSync(workspaceE2ERunIdSchema)(value);
+  Schema.decodeSync(workspaceE2ERunIdSchema)(value);
 
 const makeAccountEnvironment = (
   overrides: Readonly<Record<string, string | undefined>> = {}
@@ -33,7 +33,8 @@ describe("workspace account e2e configuration", () => {
   test("fails closed before account cases when the Vercel log-read token is absent", () => {
     expect(() =>
       getAccountE2EConfig(
-        makeAccountEnvironment({ WORKSPACE_E2E_VERCEL_TOKEN: undefined })
+        makeAccountEnvironment({ WORKSPACE_E2E_VERCEL_TOKEN: undefined }),
+        runId("1234567890-2")
       )
     ).toThrow("WORKSPACE_E2E_VERCEL_TOKEN is required");
   });
@@ -41,7 +42,8 @@ describe("workspace account e2e configuration", () => {
   test("fails closed before account cases when the Vercel project id is absent", () => {
     expect(() =>
       getAccountE2EConfig(
-        makeAccountEnvironment({ WORKSPACE_E2E_VERCEL_PROJECT: undefined })
+        makeAccountEnvironment({ WORKSPACE_E2E_VERCEL_PROJECT: undefined }),
+        runId("1234567890-2")
       )
     ).toThrow("WORKSPACE_E2E_VERCEL_PROJECT is required");
   });
@@ -50,7 +52,8 @@ describe("workspace account e2e configuration", () => {
     getAccountE2EConfig(
       makeAccountEnvironment({
         VERCEL_AUTOMATION_BYPASS_SECRET: "bypass-secret-value",
-      })
+      }),
+      runId("1234567890-2")
     );
 
     expect(redact("probe bypass-secret-value tail")).toBe(
@@ -59,7 +62,7 @@ describe("workspace account e2e configuration", () => {
   });
 
   test("registers the Vercel log-read token with the process redactor", () => {
-    getAccountE2EConfig(makeAccountEnvironment());
+    getAccountE2EConfig(makeAccountEnvironment(), runId("1234567890-2"));
 
     expect(redact("token vercel-log-read-token tail")).toBe(
       "token [redacted] tail"

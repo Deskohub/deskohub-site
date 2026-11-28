@@ -88,7 +88,6 @@ const discountRow = (
   subtotal_after_value: row.subtotal_before_value - row.applied_amount_value,
   subtotal_before_currency: "CZK",
   subtotal_before_exponent: 2,
-  subtotal_before_value: row.subtotal_before_value,
   ...row,
 });
 

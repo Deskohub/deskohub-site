@@ -1,18 +1,26 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
+  DotyposBranchIdSchema,
+  DotyposClientIdSchema,
+  DotyposCloudIdSchema,
   DotyposCustomerIdSchema,
+  DotyposDiscountGroupIdSchema,
+  DotyposEmployeeIdSchema,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
   DotyposService,
 } from "@deskohub/dotypos";
 import type { DiscountGroup } from "@deskohub/dotypos/generated";
-import { Temporal } from "@js-temporal/polyfill";
-import { Effect, Layer, Logger, Tracer } from "effect";
+import "@/shared/polyfills/temporal";
+import { Effect, Layer, Logger, Schema, Tracer } from "effect";
 import { HttpClient } from "effect/http";
 import {
   hasPreviousPaidBooking,
   hasPriorConfirmedDotyposBooking,
 } from "@/features/referrals/eligibility";
 import type { DatasourceConfig } from "../config";
+import { validE2ERuntimeEnvironment } from "../e2e-env.test-fixture";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
   cancelDotyposReservation,
@@ -25,6 +33,33 @@ import {
   waitForDotyposCancellationConvergence,
 } from "./dotypos";
 
+const makeLocalDotyposConfig = (port: number | undefined): DatasourceConfig => {
+  assert(port, "expected a local Dotypos server port");
+  return {
+    databaseUrl: "postgres://localhost/fake",
+    databaseUrlUnpooled: "postgres://localhost/fake",
+    dotypos: {
+      apiTimeout: 1_000,
+      apiUrl: `http://127.0.0.1:${port}`,
+      branchId: DotyposBranchIdSchema.make("11111111"),
+      clientId: DotyposClientIdSchema.make("e2e-client"),
+      clientSecret: "e2e-client-secret",
+      cloudId: DotyposCloudIdSchema.make("cloud-id"),
+      employeeId: DotyposEmployeeIdSchema.make("22222222"),
+      refreshToken: "e2e-refresh-token",
+    },
+    fixtureCapacityTarget: {
+      baseUrl: validE2ERuntimeEnvironment.WORKSPACE_E2E_BASE_URL,
+      githubRunAttempt: undefined,
+      githubRunId: undefined,
+      targetSha: undefined,
+    },
+    expectedCurrency: "CZK",
+    nexiApiOrigin: "https://xpaysandbox.nexigroup.com",
+    timeouts: workspaceE2ETimeouts,
+  };
+};
+
 test("selects an active partial Dotypos discount deterministically", () => {
   const selected = selectE2EDotyposDiscountGroup([
     { id: "deleted", deleted: true, discountPercent: "5" },
@@ -36,7 +71,10 @@ test("selects an active partial Dotypos discount deterministically", () => {
     { id: "fractional", discountPercent: "0.07" },
   ] satisfies readonly DiscountGroup[]);
 
-  expect(selected).toEqual({ basisPoints: 7, id: "fractional" });
+  expect(selected).toEqual({
+    basisPoints: 7,
+    id: DotyposDiscountGroupIdSchema.make("fractional"),
+  });
 });
 
 test("rejects a near-total group that leaves too little for stacked discounts", () => {
@@ -53,11 +91,21 @@ test("reports how many cancelled reservations remained active by status", async 
   const revived = DotyposReservationIdSchema.make("revived-reservation");
   const converged = DotyposReservationIdSchema.make("converged-reservation");
 
+  const reservation = (id: string, status: "CONFIRMED" | "NEW") =>
+    Schema.decodeSync(DotyposReservationSchema)({
+      id,
+      _branchId: "branch",
+      _cloudId: "cloud",
+      startDate: "2099-01-01T10:00:00Z",
+      endDate: "2099-01-01T12:00:00Z",
+      seats: "1",
+      status,
+    });
   const error = await Effect.runPromise(
     waitForDotyposCancellationConvergence(
       Effect.succeed([
-        { id: revived, status: "CONFIRMED" as const },
-        { id: "unrelated-reservation", status: "NEW" as const },
+        reservation(revived, "CONFIRMED"),
+        reservation("unrelated-reservation", "NEW"),
       ]),
       [revived, converged],
       { intervalMs: 1, timeoutMs: 20 }
@@ -112,23 +160,7 @@ test("the cleanup adapter reads convergence from the overlapping-interval listin
   });
 
   try {
-    const config: DatasourceConfig = {
-      databaseUrl: "postgres://localhost/fake",
-      databaseUrlUnpooled: "postgres://localhost/fake",
-      dotypos: {
-        apiTimeout: 1_000,
-        apiUrl: `http://127.0.0.1:${server.port}`,
-        branchId: "11111111",
-        clientId: "e2e-client",
-        clientSecret: "e2e-client-secret",
-        cloudId: "cloud-id",
-        employeeId: "22222222",
-        refreshToken: "e2e-refresh-token",
-      },
-      expectedCurrency: "CZK",
-      nexiApiOrigin: "https://xpaysandbox.nexigroup.com",
-      timeouts: workspaceE2ETimeouts,
-    };
+    const config = makeLocalDotyposConfig(server.port);
 
     await Effect.runPromise(
       waitForCancelledDotyposReservations(config, [reservationId], interval)
@@ -205,23 +237,7 @@ test("the reservation-transition fixture does not leave unknown confirmed referr
   });
 
   try {
-    const config: DatasourceConfig = {
-      databaseUrl: "postgres://localhost/fake",
-      databaseUrlUnpooled: "postgres://localhost/fake",
-      dotypos: {
-        apiTimeout: 1_000,
-        apiUrl: `http://127.0.0.1:${server.port}`,
-        branchId: "11111111",
-        clientId: "e2e-client",
-        clientSecret: "e2e-client-secret",
-        cloudId: "cloud-id",
-        employeeId: "22222222",
-        refreshToken: "e2e-refresh-token",
-      },
-      expectedCurrency: "CZK",
-      nexiApiOrigin: "https://xpaysandbox.nexigroup.com",
-      timeouts: workspaceE2ETimeouts,
-    };
+    const config = makeLocalDotyposConfig(server.port);
 
     // The existing account transition cancels only its second reservation.
     await Effect.runPromise(cancelDotyposReservation(config, secondId));
@@ -297,23 +313,7 @@ test("Dotypos service logs and request spans stay out of E2E output", async () =
   });
 
   try {
-    const config: DatasourceConfig = {
-      databaseUrl: "postgres://localhost/fake",
-      databaseUrlUnpooled: "postgres://localhost/fake",
-      dotypos: {
-        apiTimeout: 1_000,
-        apiUrl: `http://127.0.0.1:${server.port}`,
-        branchId: "11111111",
-        clientId: "e2e-client",
-        clientSecret: "e2e-client-secret",
-        cloudId: "cloud-id",
-        employeeId: "22222222",
-        refreshToken: "e2e-refresh-token",
-      },
-      expectedCurrency: "CZK",
-      nexiApiOrigin: "https://xpaysandbox.nexigroup.com",
-      timeouts: workspaceE2ETimeouts,
-    };
+    const config = makeLocalDotyposConfig(server.port);
     const cancel = Effect.gen(function* () {
       const dotypos = yield* DotyposService;
       yield* dotypos.cancelReservation(reservationId);
@@ -370,11 +370,10 @@ test("Dotypos service logs and request spans stay out of E2E output", async () =
     expect(carriesReservationId(serviceOutput.logLines)).toBe(true);
     expect(carriesReservationId(serviceOutput.spanValues)).toBe(true);
 
-    // The runner's loggers and tracer receive none of it.
+    // The runner layer replaces the capture logger and disables request spans.
     const runnerOutput = await captureOutput((captureLogs) =>
       cancel.pipe(
-        Effect.provide(getDotyposLayer(config)),
-        Effect.provide(captureLogs)
+        Effect.provide(Layer.merge(captureLogs, getDotyposLayer(config)))
       )
     );
     expect(runnerOutput.logLines).toEqual([]);

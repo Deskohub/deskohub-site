@@ -92,12 +92,16 @@ describe("callback URL grammar", () => {
   });
 
   test("words the signed-in card for the landing", () => {
-    expect(signedInCallbackCopy({})).toEqual({
+    expect<{ label: string; title: string; body: string }>(
+      signedInCallbackCopy({})
+    ).toEqual({
       label: "Loading sign-in…",
       title: "You are signed in",
       body: "Taking you to your account…",
     });
-    expect(signedInCallbackCopy(czechLanding)).toEqual({
+    expect<{ label: string; title: string; body: string }>(
+      signedInCallbackCopy(czechLanding)
+    ).toEqual({
       label: "Načítání přihlášení…",
       title: "Přihlášení proběhlo",
       body: "Vracíme tě zpět. Dokončit můžeš přímo v tomto prohlížeči.",

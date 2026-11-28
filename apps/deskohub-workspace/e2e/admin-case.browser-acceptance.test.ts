@@ -203,9 +203,10 @@ const runAdminStep = async (input: {
 };
 
 const annotateAdminStep = async (input: Parameters<typeof runAdminStep>[0]) =>
-  (await runAdminStep(input)).annotations.map(({ failureKind, outcome }) => ({
-    failureKind,
-    outcome,
+  (await runAdminStep(input)).annotations.map((annotation) => ({
+    failureKind:
+      "failureKind" in annotation ? annotation.failureKind : undefined,
+    outcome: annotation.outcome,
   }));
 
 const failed = [{ failureKind: "error", outcome: "failed" } as const];
