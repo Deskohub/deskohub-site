@@ -11,10 +11,13 @@ import {
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { Schema } from "effect";
 import type { MeetingRoomReservationDuration } from "@/features/reservation/meeting-room-reservation-duration";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
+import { getOfficeReservationIntervalInput } from "@/features/reservation/office-reservation";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { outcomeOf } from "@/shared/testing/promise-outcome.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { getWorkspaceE2EOfficeInvitees } from "../office";
 import type { CheckoutData } from "../types";
 import {
@@ -30,6 +33,7 @@ import {
   prepareReservationForm,
   type ReservationFormPreparation,
   readReservationPreparationState,
+  reservationPreparationStateSchema,
   toReservationSelection,
   toReservationSelectionPreparation,
   toReservationStep,
@@ -67,12 +71,14 @@ const fourHours = {
   unit: "hour",
   amount: 4,
 } as const satisfies MeetingRoomReservationDuration;
-const officeSlot: OfficeCheckoutSlot = {
+const officeDates = {
   startsOn: "2099-09-01",
   endsOn: "2099-09-02",
+};
+const officeSlot: OfficeCheckoutSlot = {
+  ...officeDates,
   seats: 2,
-  startsAt: "2099-08-31T22:00:00Z" as OfficeCheckoutSlot["startsAt"],
-  endsAt: "2099-09-02T22:00:00Z" as OfficeCheckoutSlot["endsAt"],
+  ...getOfficeReservationIntervalInput(officeDates),
 };
 
 const getPage = () => {
@@ -241,17 +247,18 @@ describe("meeting-room reservation preparation in Chromium", () => {
       const currentPage = getPage();
       await currentPage.setContent(html);
       await currentPage.evaluate(() => {
-        (
-          globalThis as typeof globalThis & { typedTimes?: string[] }
-        ).typedTimes = [];
-        document
-          .querySelector('input[aria-label="Meeting room start time"]')!
-          .addEventListener("input", (event) => {
-            const target = event.currentTarget as HTMLInputElement;
-            (
-              globalThis as typeof globalThis & { typedTimes?: string[] }
-            ).typedTimes!.push(target.value);
-          });
+        const time = document.querySelector(
+          'input[aria-label="Meeting room start time"]'
+        );
+        if (!(time instanceof HTMLInputElement)) {
+          throw new Error("meeting-room start time input not found");
+        }
+        const typedTimes: string[] = [];
+        time.dataset.typedTimes = JSON.stringify(typedTimes);
+        time.addEventListener("input", () => {
+          typedTimes.push(time.value);
+          time.dataset.typedTimes = JSON.stringify(typedTimes);
+        });
       });
 
       expect(
@@ -265,15 +272,14 @@ describe("meeting-room reservation preparation in Chromium", () => {
         })
       ).toBe("about:blank");
       expect(
-        await currentPage.evaluate(() => ({
-          time: document.querySelector<HTMLInputElement>(
+        await currentPage.evaluate(() => {
+          const time = document.querySelector(
             'input[aria-label="Meeting room start time"]'
-          )?.value,
-          typedTimes: (
-            globalThis as typeof globalThis & { typedTimes?: string[] }
-          ).typedTimes,
-        }))
-      ).toEqual({ time: "14:00", typedTimes: [] });
+          );
+          if (!(time instanceof HTMLInputElement)) return null;
+          return { time: time.value, typedTimes: time.dataset.typedTimes };
+        })
+      ).toEqual({ time: "14:00", typedTimes: "[]" });
     }
   );
 
@@ -319,11 +325,13 @@ describe("meeting-room reservation preparation in Chromium", () => {
       const html = meetingRoomHtml({
         date: data.date,
         disabled: true,
-        extraMarkup: `<button id="reservation-advertised-price-retry" type="button"></button>`,
+        extraMarkup: `<button id="reservation-advertised-price-retry" type="button" data-retry-count="0"></button>`,
         script: `
-          window.retryCount = 0;
-          document.querySelector("#reservation-advertised-price-retry")
-            .addEventListener("click", () => window.retryCount++);
+          const retry = document.querySelector("#reservation-advertised-price-retry");
+          let retryCount = 0;
+          retry.addEventListener("click", () => {
+            retry.dataset.retryCount = String(++retryCount);
+          });
         `,
       });
 
@@ -338,10 +346,10 @@ describe("meeting-room reservation preparation in Chromium", () => {
         "meeting-room availability or advertised price did not become ready"
       );
       expect(
-        await getPage().evaluate(
-          () => (window as typeof window & { retryCount: number }).retryCount
-        )
-      ).toBe(1);
+        await getPage()
+          .locator("#reservation-advertised-price-retry")
+          .getAttribute("data-retry-count")
+      ).toBe("1");
     }
   );
 
@@ -399,14 +407,14 @@ describe("meeting-room reservation preparation in Chromium", () => {
         script: `
           const hiddenStart = document.querySelector('input[name="startDateTime"]');
           const time = document.querySelector('input[aria-label="Meeting room start time"]');
-          window.timeChangedBeforeDate = false;
+          time.dataset.changedBeforeDate = "false";
           document.querySelector('[data-day] button').addEventListener("click", () => {
             queueMicrotask(() => {
               hiddenStart.value = "2099-10-02T10:00";
             });
           });
           time.addEventListener("change", () => {
-            if (hiddenStart.value !== "2099-10-02T10:00") window.timeChangedBeforeDate = true;
+            if (hiddenStart.value !== "2099-10-02T10:00") time.dataset.changedBeforeDate = "true";
           });
         `,
       });
@@ -418,21 +426,28 @@ describe("meeting-room reservation preparation in Chromium", () => {
         )
       ).toBe("about:blank");
       expect(
-        await getPage().evaluate(() => ({
-          start: document.querySelector<HTMLInputElement>(
-            'input[name="startDateTime"]'
-          )?.value,
-          time: document.querySelector<HTMLInputElement>(
+        await getPage().evaluate(() => {
+          const start = document.querySelector('input[name="startDateTime"]');
+          const time = document.querySelector(
             'input[aria-label="Meeting room start time"]'
-          )?.value,
-          timeChangedBeforeDate: (
-            window as typeof window & { timeChangedBeforeDate: boolean }
-          ).timeChangedBeforeDate,
-        }))
+          );
+          if (
+            !(
+              start instanceof HTMLInputElement &&
+              time instanceof HTMLInputElement
+            )
+          )
+            return null;
+          return {
+            start: start.value,
+            time: time.value,
+            timeChangedBeforeDate: time.dataset.changedBeforeDate,
+          };
+        })
       ).toEqual({
         start: "2099-10-02T10:00",
         time: "10:00",
-        timeChangedBeforeDate: false,
+        timeChangedBeforeDate: "false",
       });
     }
   );
@@ -561,10 +576,10 @@ describe("office reservation preparation in Chromium", () => {
 
 const tableSlot: TableCheckoutSlot = {
   date: "2099-09-02",
-  endsAt: "2099-09-02T10:00:00Z" as TableCheckoutSlot["endsAt"],
+  endsAt: instantStringSchema.make("2099-09-02T10:00:00Z"),
   endTime: "12:00",
   seats: 4,
-  startsAt: "2099-09-02T08:00:00Z" as TableCheckoutSlot["startsAt"],
+  startsAt: instantStringSchema.make("2099-09-02T08:00:00Z"),
   startTime: "10:00",
 };
 
@@ -1034,7 +1049,7 @@ describe("reservation step composition in Chromium", () => {
     "fills contact on the contact step and waits for Submit",
     async () => {
       const html = `
-        <form>
+        <form data-submit-events="0">
           <input name="name" />
           <input name="email" />
           <input name="emailConfirmation" />
@@ -1042,10 +1057,11 @@ describe("reservation step composition in Chromium", () => {
           <button id="reservation-submit" type="submit" disabled></button>
         </form>
         <script>
-          window.submitEvents = 0;
-          document.querySelector("form").addEventListener("submit", (event) => {
+          const form = document.querySelector("form");
+          let submitEvents = 0;
+          form.addEventListener("submit", (event) => {
             event.preventDefault();
-            window.submitEvents++;
+            form.dataset.submitEvents = String(++submitEvents);
           });
           setTimeout(() => {
             document.querySelector("#reservation-submit").disabled = false;
@@ -1066,15 +1082,14 @@ describe("reservation step composition in Chromium", () => {
           )?.value,
           phone: document.querySelector<HTMLInputElement>('input[name="phone"]')
             ?.value,
-          submitEvents: (window as typeof window & { submitEvents: number })
-            .submitEvents,
+          submitEvents: document.querySelector("form")?.dataset.submitEvents,
         }))
       ).toEqual({
         name: data.name,
         email: data.email,
         confirmation: data.email,
         phone: data.phone,
-        submitEvents: 0,
+        submitEvents: "0",
       });
     }
   );
@@ -1092,14 +1107,14 @@ describe("reservation step composition in Chromium", () => {
         </form>
         <script>
           const submit = document.querySelector("#reservation-submit");
-          window.submitEnabledAgain = false;
+          submit.dataset.enabledAgain = "false";
           document.querySelector('input[name="name"]').addEventListener("input", () => {
             queueMicrotask(() => {
               Promise.resolve().then(() => {
                 submit.disabled = true;
                 setTimeout(() => {
                   submit.disabled = false;
-                  window.submitEnabledAgain = true;
+                  submit.dataset.enabledAgain = "true";
                 }, 500);
               });
             });
@@ -1110,15 +1125,15 @@ describe("reservation step composition in Chromium", () => {
         await prepareOn(html, withWaits(toReservationStep(data), 1_000, 1_500))
       ).toBe("about:blank");
       expect(
-        await getPage().evaluate(() => ({
-          enabledAgain: (
-            window as typeof window & { submitEnabledAgain: boolean }
-          ).submitEnabledAgain,
-          submitDisabled: document.querySelector<HTMLButtonElement>(
-            "#reservation-submit"
-          )?.disabled,
-        }))
-      ).toEqual({ enabledAgain: true, submitDisabled: false });
+        await getPage().evaluate(() => {
+          const submit = document.querySelector("#reservation-submit");
+          if (!(submit instanceof HTMLButtonElement)) return null;
+          return {
+            enabledAgain: submit.dataset.enabledAgain,
+            submitDisabled: submit.disabled,
+          };
+        })
+      ).toEqual({ enabledAgain: "true", submitDisabled: false });
     }
   );
 
@@ -1200,17 +1215,20 @@ describe("reservation step composition in Chromium", () => {
       `prepared ${family} reservation only waits and never submits`,
       async () => {
         const html = `
-          <form>
-            <button id="reservation-submit" type="submit" disabled></button>
+          <form data-submit-events="0">
+            <button id="reservation-submit" type="submit" data-click-events="0" disabled></button>
           </form>
           <script>
-            window.clickEvents = 0;
-            window.submitEvents = 0;
+            let clickEvents = 0;
+            let submitEvents = 0;
             const action = document.querySelector("#reservation-submit");
-            action.addEventListener("click", () => window.clickEvents++);
-            document.querySelector("form").addEventListener("submit", (event) => {
+            action.addEventListener("click", () => {
+              action.dataset.clickEvents = String(++clickEvents);
+            });
+            const form = document.querySelector("form");
+            form.addEventListener("submit", (event) => {
               event.preventDefault();
-              window.submitEvents++;
+              form.dataset.submitEvents = String(++submitEvents);
             });
             setTimeout(() => {
               action.disabled = false;
@@ -1222,12 +1240,12 @@ describe("reservation step composition in Chromium", () => {
         ).toBe("about:blank");
         expect(
           await getPage().evaluate(() => ({
-            clickEvents: (window as typeof window & { clickEvents: number })
-              .clickEvents,
-            submitEvents: (window as typeof window & { submitEvents: number })
-              .submitEvents,
+            clickEvents: document
+              .querySelector("#reservation-submit")
+              ?.getAttribute("data-click-events"),
+            submitEvents: document.querySelector("form")?.dataset.submitEvents,
           }))
-        ).toEqual({ clickEvents: 0, submitEvents: 0 });
+        ).toEqual({ clickEvents: "0", submitEvents: "0" });
       }
     );
   }
@@ -1256,19 +1274,34 @@ describe("reservation step composition in Chromium", () => {
   );
 });
 
+const isReservationPreparationSettled = (key: string): boolean => {
+  const state: unknown = Reflect.get(globalThis, key);
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    "status" in state &&
+    (state.status === "ready" || state.status === "failed")
+  );
+};
+
+const decodeReservationPreparationState = Schema.decodeUnknownSync(
+  reservationPreparationStateSchema
+);
+
 describe("detached reservation preparation in Chromium", () => {
   test.skipIf(!chromiumAvailable)(
     "returns immediately, records pending then ready, and never submits",
     async () => {
       const html = `
-        <form>
+        <form data-submit-events="0">
           <button id="reservation-submit" type="submit" disabled></button>
         </form>
         <script>
-          window.submitEvents = 0;
-          document.querySelector("form").addEventListener("submit", (event) => {
+          const form = document.querySelector("form");
+          let submitEvents = 0;
+          form.addEventListener("submit", (event) => {
             event.preventDefault();
-            window.submitEvents++;
+            form.dataset.submitEvents = String(++submitEvents);
           });
         </script>
       `;
@@ -1296,14 +1329,7 @@ describe("detached reservation preparation in Chromium", () => {
       });
       const becameReady = await currentPage
         .waitForFunction(
-          (key) => {
-            const state = (
-              globalThis as typeof globalThis & {
-                [name: string]: { status?: string } | undefined;
-              }
-            )[key];
-            return state?.status === "ready" || state?.status === "failed";
-          },
+          isReservationPreparationSettled,
           "detachedPreparation",
           { timeout: 5_000 }
         )
@@ -1316,12 +1342,12 @@ describe("detached reservation preparation in Chromium", () => {
         "detachedPreparation"
       );
       const submitEvents = await currentPage.evaluate(
-        () => (window as typeof window & { submitEvents: number }).submitEvents
+        () => document.querySelector("form")?.dataset.submitEvents
       );
       expect({ becameReady, state, submitEvents }).toEqual({
         becameReady: true,
         state: { status: "ready" },
-        submitEvents: 0,
+        submitEvents: "0",
       });
     }
   );
@@ -1349,39 +1375,33 @@ describe("detached reservation preparation in Chromium", () => {
         })
       ).toBe(true);
       await currentPage.waitForFunction(
-        (key) => {
-          const state = (
-            globalThis as typeof globalThis & {
-              [name: string]: { status?: string } | undefined;
-            }
-          )[key];
-          return state?.status === "failed";
-        },
+        isReservationPreparationSettled,
         "failedPreparation",
         { timeout: 2_000 }
       );
-      const state = (await currentPage.evaluate(
-        readReservationPreparationState,
-        "failedPreparation"
-      )) as { status: string; error?: string };
-      expect(state.status).toBe("failed");
+      const state = decodeReservationPreparationState(
+        await currentPage.evaluate(
+          readReservationPreparationState,
+          "failedPreparation"
+        )
+      );
+      if (state.status !== "failed") {
+        throw new Error(`reservation preparation ended as ${state.status}`);
+      }
       expect(state.error).toHaveLength(500);
-      expect(state.error?.startsWith(tier.slice(0, 500))).toBe(true);
+      expect(state.error.startsWith(tier.slice(0, 500))).toBe(true);
     }
   );
 });
 
 describe("reservation preparation builders", () => {
   test("requires matching room and office data", () => {
-    const cowork = makeCoworkCheckoutData(origin, "2099-09-01");
     const missingRoom = {
-      ...cowork,
-      expectedReservationDetails: { kind: "meeting-room" } as never,
+      ...meetingRoomData("2099-09-01T10:00", oneHour, "missing-room"),
       meetingRoom: undefined,
     } satisfies CheckoutData;
     const missingOffice = {
-      ...cowork,
-      expectedReservationDetails: { kind: "office" } as never,
+      ...makeOfficeCheckoutData(origin, officeSlot),
       office: undefined,
     } satisfies CheckoutData;
 

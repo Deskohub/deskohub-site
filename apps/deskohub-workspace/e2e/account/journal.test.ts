@@ -2,11 +2,12 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { makeCoworkCheckoutData } from "../checkout/data";
 import {
   readWorkspaceE2ECaseJournals,
   writeWorkspaceE2ECaseJournal,
 } from "../playwright-checkout/run-plan";
-import type { CheckoutData, CheckoutFlowState } from "../types";
 import {
   makeWorkspaceE2EAccountJournalRecorder,
   parseWorkspaceE2EAccountJournal,
@@ -28,13 +29,18 @@ afterAll(async () => {
 });
 
 test("keeps a case's checkout and account journals apart", async () => {
+  const orderId = workspaceReservationIdSchema.make("order-1");
   const recorder = makeWorkspaceE2EAccountJournalRecorder(caseId);
   await recorder.record({ authUserIds: ["synthetic-auth-user"] });
   await writeWorkspaceE2ECaseJournal(caseId, [
     {
-      data: { date: "2099-09-01" } as CheckoutData,
-      orderId: "order-1",
-    } as CheckoutFlowState,
+      data: makeCoworkCheckoutData(
+        "https://workspace.example.test",
+        "2099-09-01",
+        caseId
+      ),
+      orderId,
+    },
   ]);
   await recorder.record({ dotyposCustomerIds: ["synthetic-customer"] });
 
@@ -43,7 +49,7 @@ test("keeps a case's checkout and account journals apart", async () => {
 
   expect(accountJournal?.authUserIds).toEqual(["synthetic-auth-user"]);
   expect(accountJournal?.dotyposCustomerIds).toEqual(["synthetic-customer"]);
-  expect(checkoutState?.orderId).toBe("order-1");
+  expect(checkoutState?.orderId).toBe(orderId);
 });
 
 test("journals an owner's retained invoices only once it records one", async () => {

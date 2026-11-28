@@ -118,6 +118,8 @@
         "apps/deskohub-workspace/**",
         "!apps/deskohub-workspace/e2e/**",
         "apps/deskohub-workspace/e2e/cases/**",
+        "apps/deskohub-workspace/e2e/checkout/**",
+        "apps/deskohub-workspace/e2e/playwright-checkout/**",
         "apps/deskohub-workspace/e2e/referrals/**",
         "!**/generated/**",
         "!**/paraglide/**"

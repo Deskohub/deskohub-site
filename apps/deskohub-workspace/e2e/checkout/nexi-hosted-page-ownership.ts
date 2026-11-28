@@ -88,7 +88,13 @@ export const leaveNexiPageForMockFallback = ({
   timeouts,
 }: {
   readonly hostedPaymentPage: HostedPaymentPage;
-  readonly row: HostedProviderSessionRow;
+  readonly row: Pick<
+    HostedProviderSessionRow,
+    | "payment_attempt_state"
+    | "payment_state"
+    | "provider"
+    | "provider_redirect_url"
+  >;
   readonly session: E2EBrowserSession;
   readonly statusPageUrl: string;
   readonly timeouts: Pick<WorkspaceE2ETimeouts, "browserAction">;

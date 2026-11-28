@@ -184,8 +184,10 @@ export function seedWorkspaceE2ELocalReservation(
     const database = yield* resolveDatabase(dependencies);
     yield* runDatabaseOperation(
       "seed and verify local reservation fixture",
-      database.transaction((transaction) =>
-        Effect.gen(function* () {
+      database.transaction(
+        Effect.fnUntraced(function* (
+          transaction: WorkspaceE2ELocalReservationTransaction
+        ) {
           yield* transaction.insertReservation(
             makeReservation(fixture, paymentState)
           );

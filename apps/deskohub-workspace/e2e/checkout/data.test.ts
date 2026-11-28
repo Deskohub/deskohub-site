@@ -1,11 +1,12 @@
 import "../../shared/polyfills/temporal";
 
-import { afterEach, expect, mock, setSystemTime, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import isEmail from "validator/lib/isEmail.js";
 import { makeWorkspaceE2EDateAllocation } from "../allocation";
 import type { WorkspaceE2EConfig } from "../config";
+import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
   makeCoworkCheckoutData,
@@ -18,20 +19,6 @@ import {
 } from "./data";
 
 afterEach(() => setSystemTime());
-
-const makeMockHttpClientLayer = (
-  handler: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
-) =>
-  FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        Object.assign(mock(handler), {
-          preconnect: globalThis.fetch.preconnect,
-        })
-      )
-    )
-  );
 
 test("does not reuse checkout phone numbers in later monthly runs", () => {
   const makePhoneSet = (now: string) => {
@@ -69,12 +56,12 @@ test("keeps generated emails valid for the longest checkout flow identifier", ()
 test("loads availability through the provided HTTP client", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const httpClientLayer = makeMockHttpClientLayer(
+  const httpClientLayer = makeHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       requests.push(request);
-      return Response.json({ unavailableDates: [] });
+      return Response.json({ unavailableDates: [null, 42] });
     }
   );
 
@@ -94,10 +81,33 @@ test("loads availability through the provided HTTP client", async () => {
   );
 });
 
+test("reports a malformed availability response as an E2E parse failure", async () => {
+  const httpClientLayer = makeHttpClientLayer(async () =>
+    Response.json({ unavailableDates: "2099-08-03" })
+  );
+
+  const result = await Effect.runPromise(
+    selectAvailableCoworkDates(makeConfig(), 1).pipe(
+      Effect.provide(httpClientLayer),
+      Effect.result
+    )
+  );
+
+  expect(result).toMatchObject({
+    _tag: "Failure",
+    failure: {
+      _tag: "WorkspaceE2EError",
+      operation: "parse workspace availability dates",
+      message:
+        "parse workspace availability dates failed: availability response missing unavailableDates",
+    },
+  });
+});
+
 test("loads only the deterministic allocation shard through availability", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const httpClientLayer = makeMockHttpClientLayer(
+  const httpClientLayer = makeHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -139,7 +149,7 @@ test("spreads sparse availability across deterministic allocation shards", async
   const unavailableDates = candidateDates.filter(
     (date) => !availableDates.has(date)
   );
-  const httpClientLayer = makeMockHttpClientLayer(async () =>
+  const httpClientLayer = makeHttpClientLayer(async () =>
     Response.json({ unavailableDates })
   );
 
@@ -148,7 +158,9 @@ test("spreads sparse availability across deterministic allocation shards", async
       Effect.runPromise(
         Effect.gen(function* () {
           const allocation = makeWorkspaceE2EDateAllocation({
-            runId: `sparse-availability-${shardIndex}`,
+            runId: workspaceE2ERunIdSchema.make(
+              `sparse-availability-${shardIndex}`
+            ),
             shardIndex,
           });
           const initialDates = yield* selectAvailableCoworkDates(
@@ -214,7 +226,7 @@ test("selects non-overlapping meeting-room slots for every duration", async () =
   const requests: Request[] = [];
   let activeRequestCount = 0;
   let maximumActiveRequestCount = 0;
-  const httpClientLayer = makeMockHttpClientLayer(
+  const httpClientLayer = makeHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -277,7 +289,7 @@ test("selects non-overlapping meeting-room slots for every duration", async () =
 
 test("keeps meeting-room dates disjoint across allocation shards", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const httpClientLayer = makeMockHttpClientLayer(async () =>
+  const httpClientLayer = makeHttpClientLayer(async () =>
     Response.json({
       meetingRoomUnavailable: false,
       unavailableDates: [],
@@ -291,7 +303,7 @@ test("keeps meeting-room dates disjoint across allocation shards", async () => {
           makeConfig(),
           [{ unit: "hour", amount: 1 }],
           makeWorkspaceE2EDateAllocation({
-            runId: `meeting-room-${shardIndex}`,
+            runId: workspaceE2ERunIdSchema.make(`meeting-room-${shardIndex}`),
             shardIndex,
           })
         ).pipe(Effect.provide(httpClientLayer))
@@ -305,7 +317,7 @@ test("keeps meeting-room dates disjoint across allocation shards", async () => {
 test("selects disjoint multi-day office ranges across allocation shards", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const httpClientLayer = makeMockHttpClientLayer(
+  const httpClientLayer = makeHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -324,7 +336,7 @@ test("selects disjoint multi-day office ranges across allocation shards", async 
           makeConfig(),
           2,
           makeWorkspaceE2EDateAllocation({
-            runId: `office-${shardIndex}`,
+            runId: workspaceE2ERunIdSchema.make(`office-${shardIndex}`),
             shardIndex,
           })
         ).pipe(Effect.provide(httpClientLayer))
@@ -359,7 +371,7 @@ test("selects disjoint multi-day office ranges across allocation shards", async 
 test("skips an unavailable office range before selecting the next owned range", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   let requestCount = 0;
-  const httpClientLayer = makeMockHttpClientLayer(async () => {
+  const httpClientLayer = makeHttpClientLayer(async () => {
     requestCount += 1;
     return Response.json({
       officeUnavailable: requestCount === 1,
@@ -383,7 +395,7 @@ test("skips an unavailable office range before selecting the next owned range", 
 test("rejects meeting-room slots that touch an unavailable date", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const httpClientLayer = makeMockHttpClientLayer(
+  const httpClientLayer = makeHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -410,7 +422,7 @@ test("rejects meeting-room slots that touch an unavailable date", async () => {
 
 test("fails meeting-room shard exhaustion with capacity context", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const httpClientLayer = makeMockHttpClientLayer(async () =>
+  const httpClientLayer = makeHttpClientLayer(async () =>
     Response.json({
       meetingRoomUnavailable: false,
       unavailableDates: [],
@@ -441,8 +453,8 @@ test("fails meeting-room shard exhaustion with capacity context", async () => {
 test("selects disjoint Team Table slots across allocation shards and prefers 10:00-12:00", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: URL[] = [];
-  const fetchMock = Object.assign(
-    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
+  const httpClientLayer = makeHttpClientLayer(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
@@ -464,11 +476,7 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
         });
       }
       return Response.json({ unavailableDates: [] });
-    }),
-    { preconnect: globalThis.fetch.preconnect }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+    }
   );
 
   const slotsByShard = await Promise.all(
@@ -479,7 +487,7 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
           4,
           2,
           makeWorkspaceE2EDateAllocation({
-            runId: `table-${shardIndex}`,
+            runId: workspaceE2ERunIdSchema.make(`table-${shardIndex}`),
             shardIndex,
           })
         ).pipe(Effect.provide(httpClientLayer))
@@ -504,9 +512,11 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
     )
   ).toBe(true);
 
+  const firstSlot = allSlots[0];
+  if (!firstSlot) throw new Error("Team Table slot was not selected");
   const checkout = makeTableCheckoutData(
     "https://workspace.example.com",
-    allSlots[0]!
+    firstSlot
   );
   expect(checkout.expectedReservationDetails).toEqual({
     durationMinutes: 120,
@@ -518,8 +528,8 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
 
 test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unavailable", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const fetchMock = Object.assign(
-    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
+  const httpClientLayer = makeHttpClientLayer(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
@@ -538,11 +548,7 @@ test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unav
         });
       }
       return Response.json({ unavailableDates: [] });
-    }),
-    { preconnect: globalThis.fetch.preconnect }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+    }
   );
 
   const [slot] = await Effect.runPromise(
@@ -550,21 +556,22 @@ test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unav
       Effect.provide(httpClientLayer)
     )
   );
+  if (!slot) throw new Error("Team Table slot was not selected");
   expect(slot).toMatchObject({
     endTime: "14:00",
     seats: 2,
     startTime: "13:00",
   });
   expect(
-    makeTableCheckoutData("https://workspace.example.com", slot!).table
+    makeTableCheckoutData("https://workspace.example.com", slot).table
       ?.checkoutInvitees
   ).toEqual([]);
 });
 
 test("fails Team Table shard exhaustion with capacity context", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const fetchMock = Object.assign(
-    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
+  const httpClientLayer = makeHttpClientLayer(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
@@ -580,11 +587,7 @@ test("fails Team Table shard exhaustion with capacity context", async () => {
         });
       }
       return Response.json({ unavailableDates: [] });
-    }),
-    { preconnect: globalThis.fetch.preconnect }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+    }
   );
 
   const exit = await Effect.runPromiseExit(
@@ -604,6 +607,23 @@ test("fails Team Table shard exhaustion with capacity context", async () => {
     expect(message).toContain("supported concurrency 3");
   }
 });
+
+const makeHttpClientLayer = (
+  fetchImplementation: (
+    input: URL | RequestInfo,
+    init?: RequestInit
+  ) => Promise<Response>
+) =>
+  FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(fetchImplementation, {
+          preconnect: globalThis.fetch.preconnect,
+        })
+      )
+    )
+  );
 
 const makeConfig = (): WorkspaceE2EConfig => ({
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type {
   WorkspaceCoworkCurrentTier,
@@ -62,6 +62,32 @@ import {
 } from "../table";
 import type { CheckoutData, CheckoutFlow } from "../types";
 import { toReservationStep } from "./reservation-form-preparation";
+
+const decodeAvailabilityDates = Schema.decodeUnknownOption(
+  Schema.Struct({ unavailableDates: Schema.Array(Schema.Unknown) })
+);
+const decodeOfficeAvailability = Schema.decodeUnknownOption(
+  Schema.Struct({ officeUnavailable: Schema.Boolean })
+);
+const decodeMeetingRoomAvailability = Schema.decodeUnknownOption(
+  Schema.Struct({ meetingRoomUnavailable: Schema.Boolean })
+);
+const isString = Schema.is(Schema.String);
+
+const requireAvailabilityField = <A>(
+  decoded: Option.Option<A>,
+  field: string
+) =>
+  Option.getOrThrowWith(
+    decoded,
+    () => new Error(`availability response missing ${field}`)
+  );
+
+const parseUnavailableDates = (availability: unknown) =>
+  requireAvailabilityField(
+    decodeAvailabilityDates(availability),
+    "unavailableDates"
+  ).unavailableDates.filter(isString);
 
 export type MeetingRoomCheckoutSlot = {
   readonly date: string;
@@ -428,30 +454,14 @@ export const loadAvailableCoworkDates = (
     const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
     const params = new URLSearchParams({ entryTier, from, to });
     if (monitorOption) params.set("monitorOption", monitorOption);
-    const availability = (yield* fetchWorkspaceAvailabilityJson(
-      config,
-      params,
-      {
-        fetchOperation: "fetch workspace availability dates",
-        readOperation: "read workspace availability response",
-        statusMessage: (status) => `availability check failed with ${status}`,
-      }
-    )) as {
-      readonly unavailableDates?: unknown;
-    };
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch workspace availability dates",
+      readOperation: "read workspace availability response",
+      statusMessage: (status) => `availability check failed with ${status}`,
+    });
     const unavailable = yield* tryWorkspaceE2ESync(
       "parse workspace availability dates",
-      () => {
-        assert(
-          Array.isArray(availability.unavailableDates),
-          "availability response missing unavailableDates"
-        );
-        return new Set(
-          availability.unavailableDates.filter(
-            (date): date is string => typeof date === "string"
-          )
-        );
-      }
+      () => new Set(parseUnavailableDates(availability))
     );
 
     const allocatedDates: string[] = [];
@@ -607,7 +617,7 @@ export const selectAvailableMeetingRoomSlots = (
           slots.every((slot) => slot !== undefined),
           "meeting-room checkout slot selection incomplete"
         );
-        return slots as readonly MeetingRoomCheckoutSlot[];
+        return slots;
       }
     );
   });
@@ -719,34 +729,21 @@ export const loadOfficeAvailability = (
       endsAt: slot.endsAt,
       seats: String(slot.seats),
     });
-    const availability = (yield* fetchWorkspaceAvailabilityJson(
-      config,
-      params,
-      {
-        fetchOperation: "fetch office availability",
-        readOperation: "read office availability response",
-        statusMessage: (status) =>
-          `office availability check failed with ${status}`,
-      }
-    )) as {
-      readonly officeUnavailable?: unknown;
-      readonly unavailableDates?: unknown;
-    };
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch office availability",
+      readOperation: "read office availability response",
+      statusMessage: (status) =>
+        `office availability check failed with ${status}`,
+    });
 
     return yield* tryWorkspaceE2ESync("parse office availability", () => {
-      assert(
-        typeof availability.officeUnavailable === "boolean",
-        "availability response missing officeUnavailable"
-      );
-      assert(
-        Array.isArray(availability.unavailableDates),
-        "availability response missing unavailableDates"
+      const { officeUnavailable } = requireAvailabilityField(
+        decodeOfficeAvailability(availability),
+        "officeUnavailable"
       );
       return {
-        officeUnavailable: availability.officeUnavailable,
-        unavailableDates: availability.unavailableDates.filter(
-          (date): date is string => typeof date === "string"
-        ),
+        officeUnavailable,
+        unavailableDates: parseUnavailableDates(availability),
       };
     });
   });
@@ -786,34 +783,21 @@ export const loadMeetingRoomAvailability = (
       startsAt: slot.startsAt,
       endsAt: slot.endsAt,
     });
-    const availability = (yield* fetchWorkspaceAvailabilityJson(
-      config,
-      params,
-      {
-        fetchOperation: "fetch meeting-room availability",
-        readOperation: "read meeting-room availability response",
-        statusMessage: (status) =>
-          `meeting-room availability check failed with ${status}`,
-      }
-    )) as {
-      readonly meetingRoomUnavailable?: unknown;
-      readonly unavailableDates?: unknown;
-    };
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch meeting-room availability",
+      readOperation: "read meeting-room availability response",
+      statusMessage: (status) =>
+        `meeting-room availability check failed with ${status}`,
+    });
 
     return yield* tryWorkspaceE2ESync("parse meeting-room availability", () => {
-      assert(
-        typeof availability.meetingRoomUnavailable === "boolean",
-        "availability response missing meetingRoomUnavailable"
-      );
-      assert(
-        Array.isArray(availability.unavailableDates),
-        "availability response missing unavailableDates"
+      const { meetingRoomUnavailable } = requireAvailabilityField(
+        decodeMeetingRoomAvailability(availability),
+        "meetingRoomUnavailable"
       );
       return {
-        meetingRoomUnavailable: availability.meetingRoomUnavailable,
-        unavailableDates: availability.unavailableDates.filter(
-          (date): date is string => typeof date === "string"
-        ),
+        meetingRoomUnavailable,
+        unavailableDates: parseUnavailableDates(availability),
       };
     });
   });
@@ -996,29 +980,15 @@ const loadTableUnavailableDates = (
       to,
       seats: String(seats),
     });
-    const availability = (yield* fetchWorkspaceAvailabilityJson(
-      config,
-      params,
-      {
-        fetchOperation: "fetch Team Table availability dates",
-        readOperation: "read Team Table availability response",
-        statusMessage: (status) =>
-          `Team Table availability check failed with ${status}`,
-      }
-    )) as { readonly unavailableDates?: unknown };
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch Team Table availability dates",
+      readOperation: "read Team Table availability response",
+      statusMessage: (status) =>
+        `Team Table availability check failed with ${status}`,
+    });
     return yield* tryWorkspaceE2ESync(
       "parse Team Table availability dates",
-      () => {
-        assert(
-          Array.isArray(availability.unavailableDates),
-          "Team Table availability response missing unavailableDates"
-        );
-        return new Set(
-          availability.unavailableDates.filter(
-            (date): date is string => typeof date === "string"
-          )
-        );
-      }
+      () => new Set(parseUnavailableDates(availability))
     );
   });
 

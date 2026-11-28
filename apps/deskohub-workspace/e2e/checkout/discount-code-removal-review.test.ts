@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { basename, dirname, resolve } from "node:path";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { workspaceDir } from "../runtime";
 import {
   getDiscountCodeRemovalReviewArtifactPath,
@@ -8,7 +8,7 @@ import {
 } from "./discount-code-removal-review";
 
 const baseUrl = "https://deskohub-workspace-site-abc123-team.vercel.app";
-const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("workspace-reservation-123");
 
 test("writes removal review PNGs per width into the account-review artifact bundle", () => {
   const artifact = getDiscountCodeRemovalReviewArtifactPath(

@@ -80,7 +80,7 @@ export type WorkspaceE2EReferralCaseId =
 export const isWorkspaceE2EReferralCaseId = (
   value: string
 ): value is WorkspaceE2EReferralCaseId =>
-  (workspaceE2EReferralCaseIds as readonly string[]).includes(value);
+  workspaceE2EReferralCaseIds.some((caseId) => caseId === value);
 
 /**
  * Cases that need the office page. A preview with the office page disabled
@@ -93,7 +93,7 @@ const workspaceE2EOfficeCaseIds = [
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 export const isWorkspaceE2EOfficeCaseId = (value: string) =>
-  (workspaceE2EOfficeCaseIds as readonly string[]).includes(value);
+  workspaceE2EOfficeCaseIds.some((caseId) => caseId === value);
 
 /**
  * Cases that need the Team Table page. A preview with `team_table_page`
@@ -105,7 +105,7 @@ const workspaceE2ETableCaseIds = [
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 export const isWorkspaceE2ETableCaseId = (value: string) =>
-  (workspaceE2ETableCaseIds as readonly string[]).includes(value);
+  workspaceE2ETableCaseIds.some((caseId) => caseId === value);
 
 /**
  * Cases too slow for the per-PR gate. They run only when the run opts into
@@ -116,7 +116,7 @@ const workspaceE2ENightlyCaseIds = [
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 export const isWorkspaceE2ENightlyCaseId = (value: string) =>
-  (workspaceE2ENightlyCaseIds as readonly string[]).includes(value);
+  workspaceE2ENightlyCaseIds.some((caseId) => caseId === value);
 
 export const workspaceE2ECaseIds = [
   ...workspaceE2ENonPaymentCaseIds,
@@ -147,4 +147,4 @@ export const workspaceE2ECasePoolOrder: readonly WorkspaceE2ECaseId[] =
 export const isWorkspaceE2ECaseId = (
   value: string
 ): value is WorkspaceE2ECaseId =>
-  (workspaceE2ECaseIds as readonly string[]).includes(value);
+  workspaceE2ECaseIds.some((caseId) => caseId === value);

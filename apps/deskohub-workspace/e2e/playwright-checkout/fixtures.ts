@@ -121,9 +121,14 @@ export const registerWorkspaceE2ECases = (
             })
           : planned;
 
+        if (selected.id !== caseId) {
+          throw new Error(
+            `Workspace E2E case ${caseId} changed its journal owner`
+          );
+        }
         const journalStartedAt = new Date();
         await writeWorkspaceE2ECaseJournal(
-          selected.id as import("./case-catalog").WorkspaceE2ECaseId,
+          caseId,
           selected.checkoutStates,
           journalStartedAt
         );
@@ -140,7 +145,7 @@ export const registerWorkspaceE2ECases = (
           );
         } finally {
           await writeWorkspaceE2ECaseJournal(
-            selected.id as import("./case-catalog").WorkspaceE2ECaseId,
+            caseId,
             selected.checkoutStates,
             journalStartedAt
           );

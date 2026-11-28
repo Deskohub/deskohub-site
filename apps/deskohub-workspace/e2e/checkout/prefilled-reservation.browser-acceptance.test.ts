@@ -5,6 +5,7 @@ import { type Browser, chromium, type Page } from "@playwright/test";
 import type { MeetingRoomReservationDuration } from "@/features/reservation/meeting-room-reservation-duration";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import type { CheckoutData } from "../types";
 import {
   makeCoworkCheckoutData,
@@ -295,10 +296,10 @@ test.skipIf(!chromiumAvailable)(
 );
 
 const officeSlot: OfficeCheckoutSlot = {
-  endsAt: "2099-09-02T22:00:00Z" as OfficeCheckoutSlot["endsAt"],
+  endsAt: instantStringSchema.make("2099-09-02T22:00:00Z"),
   endsOn: "2099-09-02",
   seats: 2,
-  startsAt: "2099-08-31T22:00:00Z" as OfficeCheckoutSlot["startsAt"],
+  startsAt: instantStringSchema.make("2099-08-31T22:00:00Z"),
   startsOn: "2099-09-01",
 };
 
@@ -368,10 +369,10 @@ test.skipIf(!chromiumAvailable)(
 
 const tableSlot: TableCheckoutSlot = {
   date: "2099-09-01",
-  endsAt: "2099-09-01T10:00:00Z" as TableCheckoutSlot["endsAt"],
+  endsAt: instantStringSchema.make("2099-09-01T10:00:00Z"),
   endTime: "12:00",
   seats: 4,
-  startsAt: "2099-09-01T08:00:00Z" as TableCheckoutSlot["startsAt"],
+  startsAt: instantStringSchema.make("2099-09-01T08:00:00Z"),
   startTime: "10:00",
 };
 
