@@ -15,6 +15,7 @@ import {
   formatAgentEvalSummaryMarkdown,
   parseAgentEvalRunResult,
 } from "./results";
+import { agentEvalOutputDirectory } from "./run-settings";
 import type { AgentEvalTaskParameters } from "./tasks";
 
 /**
@@ -26,13 +27,6 @@ const agentEvalResultsRoot = resolve(
   workspaceDir,
   "e2e-artifacts",
   "agent-eval-results"
-);
-
-/** The agent eval config's Playwright output directory. */
-export const agentEvalOutputDirectory = resolve(
-  workspaceDir,
-  "e2e-artifacts",
-  "agent-evals"
 );
 
 const runSetPath = resolve(agentEvalOutputDirectory, "run-set.json");

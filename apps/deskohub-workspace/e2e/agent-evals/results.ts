@@ -15,11 +15,9 @@ import {
   agentEvalPaymentPageSchema,
   agentEvalRouteSchema,
 } from "./observations";
+import { agentEvalMinimumRunsPerCell } from "./run-settings";
 import type { AgentEvalTarget } from "./target";
 import { type AgentEvalTaskId, agentEvalTaskIds } from "./tasks";
-
-/** The ticket's floor: each task, harness, and locale runs at least 5 times. */
-export const agentEvalMinimumRunsPerCell = 5;
 
 /**
  * One run's result file. It holds no transcript and no personal data: the
