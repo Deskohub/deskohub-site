@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
+import { workspaceE2EError } from "../errors";
 import {
   makeSuiteLocalProviderVerificationPermitLayer,
   WorkspaceE2EProviderVerificationPermitService,
@@ -67,7 +68,7 @@ test("holds provider verification capacity through the cooldown after failure", 
               })
             ),
             Effect.andThen(
-              Effect.fail(new Error("provider verification failed"))
+              Effect.fail(workspaceE2EError("provider verification failed"))
             )
           )
         )

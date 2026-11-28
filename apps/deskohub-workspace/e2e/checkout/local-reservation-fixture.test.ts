@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, Exit } from "effect";
+import { Data, Effect, Exit } from "effect";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
   seedWorkspaceE2ELocalReservation,
@@ -8,6 +8,12 @@ import {
   type WorkspaceE2ELocalReservationTransaction,
   withWorkspaceE2ELocalReservationFixture,
 } from "./local-reservation-fixture";
+
+class LocalReservationFixtureError extends Data.TaggedError(
+  "LocalReservationFixtureError"
+)<{
+  readonly message: string;
+}> {}
 
 type Reservation = Parameters<
   WorkspaceE2ELocalReservationTransaction["insertReservation"]
@@ -33,7 +39,11 @@ const makeFakeDatabase = (
       const transaction = {
         findReservation: (id: WorkspaceReservationId) =>
           options.failVerificationRead
-            ? Effect.fail(new Error("verification read failed"))
+            ? Effect.fail(
+                new LocalReservationFixtureError({
+                  message: "verification read failed",
+                })
+              )
             : Effect.sync(() => (reservations.has(id) ? [{ id }] : [])),
         insertReservation: (reservation: Reservation) =>
           Effect.sync(() => {
@@ -80,7 +90,9 @@ test("seeds one terminal local row and removes exactly that row in the finalizer
             const reservation = fake.reservations.get(value.reservationId);
             expect(reservation).toBeDefined();
             if (!reservation) {
-              return yield* Effect.fail(new Error("reservation missing"));
+              return yield* new LocalReservationFixtureError({
+                message: "reservation missing",
+              });
             }
 
             expect(reservation.overrides?.checkoutAttemptKey).toBe(
@@ -94,7 +106,9 @@ test("seeds one terminal local row and removes exactly that row in the finalizer
               reservation: "hold_expired",
               payment: "expired",
             });
-            return yield* Effect.fail(new Error("exercise finalizer"));
+            return yield* new LocalReservationFixtureError({
+              message: "exercise finalizer",
+            });
           }),
         { database: fake.database }
       )

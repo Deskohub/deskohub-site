@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { workspaceE2EError } from "../errors";
 import {
   prepareWorkspaceE2EHostedPaymentPermitQueue,
   type WorkspaceE2EHostedPaymentPermitOptions,
@@ -161,7 +162,7 @@ test("releases the slot when the hosted session fails", async () => {
       const failed = yield* Effect.exit(
         permit.withPermit(
           "failing",
-          Effect.fail(new Error("Nexi rejected the card"))
+          Effect.fail(workspaceE2EError("Nexi rejected the card"))
         )
       );
       const next = yield* permit
@@ -245,8 +246,7 @@ test("reclaims the slot of a holder process that crashed", async () => {
         .withPermit("next", Effect.succeed("admitted"))
         .pipe(Effect.timeout("2 seconds"));
     }),
-    // The lease alone would block for a minute; process exit frees the slot.
-    { capacity: 1, leaseMs: 60_000 }
+    { capacity: 1 }
   );
 
   expect(next).toBe("admitted");
@@ -267,7 +267,7 @@ test("ignores tickets this process leaked without a release", async () => {
         .withPermit("next", Effect.succeed("admitted"))
         .pipe(Effect.timeout("2 seconds"));
     }),
-    { capacity: 1, leaseMs: 60_000 }
+    { capacity: 1 }
   );
 
   expect(next).toBe("admitted");

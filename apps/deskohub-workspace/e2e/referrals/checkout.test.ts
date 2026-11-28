@@ -4,12 +4,13 @@ import { expect, test } from "bun:test";
 import { basename, dirname, resolve } from "node:path";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { PayState } from "@/features/checkout/backend/checkout/pay-state";
 import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { getReservationCustomerQueryMode } from "@/features/reservation/reservation-checkout-query";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -140,15 +141,17 @@ test("both ownership guards accept and constrain URLs from the real fresh-pay bu
   );
   const baseUrl = "https://workspace.example.test";
   const config = makeTestE2EConfig(baseUrl);
-  const reservation = {
-    kind: "cowork" as const,
-    entryTier: "basic" as const,
+  const reservation = Schema.decodeUnknownSync(
+    normalizedCoworkReservationOrderSchema
+  )({
+    kind: "cowork",
+    entryTier: "basic",
     coffee: false,
     date: "2099-09-01",
     name: "Synthetic E2E",
     email: testEmailAddress("delivered+referral-url"),
     phone: "+420 555 000 111",
-  };
+  });
   const input = {
     locale: "en-US" as const,
     orderId,
@@ -156,6 +159,7 @@ test("both ownership guards accept and constrain URLs from the real fresh-pay bu
       "checkout-session-referral-url"
     ),
     bookedAt: instantStringSchema.make("2026-06-01T09:58:00.000Z"),
+    holdExpiresAt: instantStringSchema.make("2026-06-01T10:08:00.000Z"),
     reservation,
     quote: buildCoworkReservationQuote(reservation),
   };

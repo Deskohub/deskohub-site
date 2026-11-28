@@ -127,7 +127,7 @@ function AccountShellHarness({
   hiddenSections = [],
 }: {
   readonly hiddenSections?: readonly AccountSection[];
-} = {}) {
+}) {
   const [activeSection, setActiveSection] =
     useState<AccountSection>("reservations");
   const selectSection = (section: AccountSection) => {
@@ -276,7 +276,7 @@ const reservationsPanelIsVisible = () => {
 test("switches one section per layout and restores the viewport", async () => {
   const viewports: { readonly height: number; readonly width: number }[] = [];
   let capturedSections: readonly AccountSection[] = [];
-  render(createElement(AccountShellHarness));
+  render(createElement(AccountShellHarness, {}));
 
   await verifyAccountLayoutNavigation(
     makeFakePage({ onSetViewport: (viewport) => viewports.push(viewport) }),
@@ -298,7 +298,7 @@ test("switches one section per layout and restores the viewport", async () => {
 
 test("visits and captures every desktop section in review runs", async () => {
   let capturedSections: readonly AccountSection[] = [];
-  render(createElement(AccountShellHarness));
+  render(createElement(AccountShellHarness, {}));
 
   await verifyAccountLayoutNavigation(
     makeFakePage(),
@@ -392,7 +392,7 @@ test("codes every account navigation phase and section with a closed diagnostic"
       if (!(failure instanceof WorkspaceE2EError))
         throw new Error("expected a Workspace E2E error");
 
-      const expectedCode = `account_layout_${phase}_${section}_failed`;
+      const expectedCode = `account_layout_${phase}_${section}_failed` as const;
       expect(failure.diagnosticCode).toBe(expectedCode);
       expect(isWorkspaceE2EDiagnosticCode(failure.diagnosticCode)).toBe(true);
       expect(failure.diagnosticCode).not.toContain(accountLayoutFailureMarker);
@@ -410,7 +410,7 @@ const runLayoutVerificationFailure = async (
   captureSection?: (section: AccountSection) => Promise<void>
 ) => {
   try {
-    render(createElement(AccountShellHarness));
+    render(createElement(AccountShellHarness, {}));
     return await verifyAccountLayoutNavigation(
       makeFakePage(options),
       captureSection,

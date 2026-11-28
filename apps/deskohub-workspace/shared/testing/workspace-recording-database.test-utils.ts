@@ -3,7 +3,7 @@ import { Effect, Layer, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { SqlClient, type SqlConnection, SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { type DatabaseClient, databaseClient } from "@/db/database-client";
+import { databaseClient, type RootDatabaseClient } from "@/db/database-client";
 
 interface RecordedStatement {
   readonly sql: string;
@@ -11,7 +11,7 @@ interface RecordedStatement {
 }
 
 export interface RecordingWorkspaceDatabase {
-  readonly db: DatabaseClient;
+  readonly db: RootDatabaseClient;
   readonly statements: readonly RecordedStatement[];
   readonly layer: Layer.Layer<WorkspaceDatabase>;
   /** Queues one canned result per upcoming statement; the last entry repeats. */

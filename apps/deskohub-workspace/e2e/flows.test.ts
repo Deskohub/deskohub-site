@@ -26,7 +26,9 @@ import { workspaceE2ECaseIds } from "./playwright-checkout/case-catalog";
 
 describe("Workspace E2E flow catalog", () => {
   test("matches the workflow flow catalog in order and short codes", () => {
-    expect([...workspaceE2EFlowIds]).toEqual([...workspaceE2EWorkflowFlowIds]);
+    expect<readonly string[]>([...workspaceE2EFlowIds]).toEqual([
+      ...workspaceE2EWorkflowFlowIds,
+    ]);
     const shortCodes = Object.values(workspaceE2EFlowShortCodes);
     expect(new Set(shortCodes).size).toBe(workspaceE2EFlowIds.length);
   });
@@ -459,7 +461,7 @@ describe("commit status description encoding and coverage summary", () => {
         if (classified.kind !== "other" && classified.kind !== "superseded") {
           const expected =
             flows === "all" ? [...workspaceE2EFlowIds] : flows.split(",");
-          expect([...classified.selected]).toEqual(expected);
+          expect<readonly string[]>([...classified.selected]).toEqual(expected);
         }
       }
     }

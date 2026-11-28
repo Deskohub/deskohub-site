@@ -101,6 +101,7 @@ const makeMarketingConsentRow = (
   dotyposCustomerId: customerId,
   documentHash: expectedConsentDocumentHash,
   grantedAt: now,
+  grantSource: null,
   locale: "en-US",
   withdrawnAt: null,
   ...overrides,
@@ -404,7 +405,7 @@ describe("workspace marketing preferences helper", () => {
     expect(readCount).toBe(2);
   });
 
-  test.each([
+  test.each<{ hash: unknown; name: string; sentinel: string }>([
     {
       hash: 12345,
       name: "a nonstring persisted hash",

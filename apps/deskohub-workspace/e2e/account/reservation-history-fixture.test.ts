@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { floorToWholeHour } from "@/shared/utils/temporal";
 import { getDatasourceConfig } from "../config";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
@@ -16,6 +17,12 @@ import {
   type WorkspaceE2EReservationHistoryProviderProjection,
   withWorkspaceE2EReservationHistoryFixture,
 } from "./reservation-history-fixture";
+
+class ReservationHistoryFixtureError extends Data.TaggedError(
+  "ReservationHistoryFixtureError"
+)<{
+  readonly message: string;
+}> {}
 
 type FixtureRows = Parameters<
   WorkspaceE2EReservationHistoryDatabase["transaction"]
@@ -83,7 +90,9 @@ const makeFakeDatabase = () => {
         const paymentAttemptId = rows.paymentAttempt.id;
         const accessGrantId = rows.accessGrant.id;
         if (!reservationId || !paymentAttemptId || !accessGrantId) {
-          return yield* Effect.fail(new Error("fixture row id missing"));
+          return yield* new ReservationHistoryFixtureError({
+            message: "fixture row id missing",
+          });
         }
         reservations.set(reservationId, rows.reservation);
         paymentAttempts.set(paymentAttemptId, rows.paymentAttempt);
@@ -198,36 +207,38 @@ test("seeds the exact rows and cleans them through the finalizer", async () => {
             expect(fakeDatabase.reservations.size).toBe(1);
             expect(fakeDatabase.paymentAttempts.size).toBe(1);
             expect(fakeDatabase.accessGrants.size).toBe(1);
-            return yield* Effect.fail(new Error("exercise finalizer"));
+            return yield* new ReservationHistoryFixtureError({
+              message: "exercise finalizer",
+            });
           }),
         makeDependencies(fakeDatabase, providerProjection, providerCalls)
       )
     )
   ).rejects.toThrow("exercise finalizer");
 
-  expect(fixture).toBeDefined();
+  assert(fixture, "expected the seeded reservation history fixture");
   expect(providerCalls).toEqual([input.dotyposReservationId]);
   expect(fakeDatabase.cleanupCalls).toEqual([
     {
-      id: fixture?.accessGrantId,
+      id: fixture.accessGrantId,
       table: "reservation_access_grants",
     },
     {
-      id: fixture?.reservationId,
+      id: fixture.reservationId,
       table: "workspace_reservations",
     },
   ]);
   expect(fakeDatabase.verificationCalls).toEqual([
     {
-      id: fixture?.accessGrantId,
+      id: fixture.accessGrantId,
       table: "reservation_access_grants",
     },
     {
-      id: fixture?.reservationId,
+      id: fixture.reservationId,
       table: "workspace_reservations",
     },
     {
-      id: fixture?.paymentAttemptId,
+      id: fixture.paymentAttemptId,
       table: "payment_attempts",
     },
   ]);

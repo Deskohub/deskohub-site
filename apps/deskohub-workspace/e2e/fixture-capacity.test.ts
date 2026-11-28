@@ -1,5 +1,9 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { DotyposReservationSchema } from "@deskohub/dotypos";
+import {
+  DotyposReservationSchema,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
+import { Schema } from "effect";
 import { getDatasourceConfig } from "./config";
 import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import {
@@ -23,7 +27,7 @@ const reservation = (
   seats: number,
   customer = "another-owner"
 ) =>
-  DotyposReservationSchema.make({
+  Schema.decodeSync(DotyposReservationSchema)({
     id: `${start}-${seats}-${customer}`,
     _cloudId: "cloud",
     _branchId: "branch",
@@ -107,11 +111,15 @@ test("peak uses end-before-start at touching endpoints, not the sum, with separa
 test("selector preserves the first eligible provider table and never skips an invalid seat capacity", () => {
   const first = {
     ...fixtureCapacityTestTable,
-    id: "first",
+    id: DotyposTableIdSchema.make("first"),
     name: "Z table",
     seats: "invalid",
   };
-  const second = { ...fixtureCapacityTestTable, id: "second", name: "A table" };
+  const second = {
+    ...fixtureCapacityTestTable,
+    id: DotyposTableIdSchema.make("second"),
+    name: "A table",
+  };
   expect(
     selectSyntheticReservationTable([
       { ...fixtureCapacityTestTable, enabled: false },

@@ -632,16 +632,20 @@ void [savedPierCount, savedDockCount, savedQuayCount];
 
 const WorkspaceLintManifest = Schema.Struct({
   name: Schema.String,
-  scripts: Schema.optionalKey(
-    Schema.Struct({ lint: Schema.optionalKey(Schema.String) })
+  scripts: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  dependencies: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  devDependencies: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.String)
   ),
 });
 
 test("every workspace shared package dependency defines a lint task", () => {
-  const workspaceManifest = JSON.parse(
-    readFileSync(
-      join(repositoryRoot, "apps/deskohub-workspace/package.json"),
-      "utf8"
+  const workspaceManifest = Schema.decodeUnknownSync(WorkspaceLintManifest)(
+    JSON.parse(
+      readFileSync(
+        join(repositoryRoot, "apps/deskohub-workspace/package.json"),
+        "utf8"
+      )
     )
   );
   const dependencyNames = Object.entries({
@@ -688,9 +692,26 @@ test("every workspace shared package dependency defines a lint task", () => {
 test("Workspace lint is a Turbo dependency graph", () => {
   const readJson = (path: string) =>
     JSON.parse(readFileSync(join(repositoryRoot, path), "utf8"));
-  const rootTurbo = readJson("turbo.json");
-  const workspaceManifest = readJson("apps/deskohub-workspace/package.json");
-  const workspaceTurbo = readJson("apps/deskohub-workspace/turbo.json");
+  const decodeTurboLint = Schema.decodeUnknownSync(
+    Schema.Struct({
+      tasks: Schema.optionalKey(
+        Schema.Struct({
+          lint: Schema.optionalKey(
+            Schema.Struct({
+              dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
+            })
+          ),
+        })
+      ),
+    })
+  );
+  const rootTurbo = decodeTurboLint(readJson("turbo.json"));
+  const workspaceManifest = Schema.decodeUnknownSync(WorkspaceLintManifest)(
+    readJson("apps/deskohub-workspace/package.json")
+  );
+  const workspaceTurbo = decodeTurboLint(
+    readJson("apps/deskohub-workspace/turbo.json")
+  );
 
   const lintTasks = ["lint:biome", "lint:eslint", "lint:knip"];
 

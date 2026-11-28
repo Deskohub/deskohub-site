@@ -7,6 +7,7 @@ import {
   retainActionSubmission,
   retainServerActionSubmission,
 } from "../admin-case";
+import { workspaceE2EError } from "../errors";
 import { pollUntil } from "../polling";
 import {
   workspaceE2EEmailCampaignCleanupTimeout,
@@ -63,7 +64,7 @@ describe("email campaign fixture release", () => {
     const persisted = (label: string) =>
       Effect.gen(function* () {
         operations.push(`converge ${label}`);
-        return yield* Effect.fail(new Error(`no ${label} row`));
+        return yield* workspaceE2EError(`no ${label} row`);
       });
     const exit = Effect.runPromiseExit(
       withInstantSleeps(

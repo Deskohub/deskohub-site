@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, expectTypeOf, test } from "bun:test";
 import { Cause, Clock, Effect, Exit, Fiber, Layer } from "effect";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { runE2ECase, type WorkspaceE2EStepRunner } from "./case-runner";
@@ -76,7 +76,7 @@ describe("case outcomes", () => {
               id: "open-page",
               timeoutMs: 100,
             });
-            yield* step({
+            return yield* step({
               execute: Effect.fail(failure),
               id: "replay-webhook",
               timeoutMs: 100,
@@ -175,18 +175,21 @@ describe("case outcomes", () => {
     const exit = await runCase(
       {
         body: (step) =>
-          Effect.gen(function* () {
-            yield* step({
-              execute: Effect.never.pipe(
-                Effect.onInterrupt(() =>
-                  Effect.sync(() => events.push("step:interrupted"))
-                )
-              ),
-              id: "wait-for-status",
-              timeoutMs: 10_000,
-            });
-            yield* Effect.sync(() => events.push("next-step"));
-          }),
+          step({
+            execute: Effect.never.pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => events.push("step:interrupted"))
+              )
+            ),
+            id: "wait-for-status",
+            timeoutMs: 10_000,
+          }).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                events.push("next-step");
+              })
+            )
+          ),
         cleanup: Effect.sync(() => {
           events.push("cleanup");
         }),
@@ -457,7 +460,7 @@ describe("case finalization", () => {
               id: "first-attempt",
               timeoutMs: 100,
             }).pipe(Effect.ignore);
-            yield* step({
+            return yield* step({
               execute: Effect.fail(workspaceE2EError("retry failed")),
               id: "retry",
               timeoutMs: 100,
@@ -610,9 +613,19 @@ describe("step permits", () => {
       watchdogMs: 1_000,
     }).pipe(Effect.provide(makeE2ETelemetryMock([])));
 
-    // @ts-expect-error The permitted step needs the provider-verification permit.
-    const unprovided: Effect.Effect<void, WorkspaceE2EError> = permitted;
-    const provided: Effect.Effect<void, WorkspaceE2EError> = unpermitted;
-    expect([unprovided, provided]).toHaveLength(2);
+    expectTypeOf(permitted).toMatchTypeOf<
+      Effect.Effect<
+        void,
+        WorkspaceE2EError,
+        WorkspaceE2EProviderVerificationPermitService
+      >
+    >();
+    expectTypeOf<
+      Effect.Services<typeof permitted>
+    >().toEqualTypeOf<WorkspaceE2EProviderVerificationPermitService>();
+    expectTypeOf(unpermitted).toMatchTypeOf<
+      Effect.Effect<void, WorkspaceE2EError>
+    >();
+    expect([permitted, unpermitted]).toHaveLength(2);
   });
 });

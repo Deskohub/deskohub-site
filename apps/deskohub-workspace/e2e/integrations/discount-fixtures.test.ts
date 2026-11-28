@@ -20,7 +20,7 @@ test("voucher credit covers two one-day Open Space checkouts after the Calendar 
     openSpacePrice -
     Math.floor((openSpacePrice * calendarSaleBasisPoints) / 10_000);
   const expectedTwoDateTotal = perDateAfterSale * 2;
-  expect(discountCodeFixtures.voucherReuse.creditPerRun.value).toBe(
+  expect<number>(discountCodeFixtures.voucherReuse.creditPerRun.value).toBe(
     expectedTwoDateTotal
   );
 });

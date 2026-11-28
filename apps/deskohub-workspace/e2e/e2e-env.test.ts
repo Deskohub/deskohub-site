@@ -12,10 +12,12 @@ import {
   makeTestE2EEnvironment,
   validE2ERuntimeEnvironment,
 } from "./e2e-env.test-fixture";
+import type { WorkspaceE2EFlowId } from "./flows";
 
 describe("Workspace E2E environment", () => {
   test("forwards only decoded variables that Playwright decodes back unchanged", () => {
-    const environment = makeTestE2EEnvironment({
+    const environment = makeWorkspaceE2EEnvironment({
+      ...validE2ERuntimeEnvironment,
       GITHUB_RUN_ATTEMPT: "2",
       NEXI_API_KEY: "app-only-key",
       WORKSPACE_E2E_ALLOCATION_SHARD: "1",
@@ -61,7 +63,7 @@ describe("Workspace E2E environment", () => {
       )
     ).toEqual({
       kind: "subset",
-      flows: new Set(["admin", "email-campaigns"]),
+      flows: new Set<WorkspaceE2EFlowId>(["admin", "email-campaigns"]),
     });
     expect(
       workspaceE2EFlowSelection(

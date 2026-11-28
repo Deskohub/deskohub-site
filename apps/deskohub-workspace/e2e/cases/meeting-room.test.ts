@@ -1,15 +1,22 @@
 import "../../shared/polyfills/temporal";
 
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
+  DotyposBranchIdSchema,
+  DotyposClientIdSchema,
+  DotyposCloudIdSchema,
   DotyposCustomerIdSchema,
+  DotyposEmployeeIdSchema,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
+  DotyposTableSchema,
 } from "@deskohub/dotypos";
-import type { Reservation, Table } from "@deskohub/dotypos/generated";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { makeMeetingRoomCheckoutData } from "../checkout/data";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
 import { isWorkspaceE2ETimeout } from "../errors";
@@ -28,9 +35,9 @@ test("keeps a held interval available while another meeting-room table is empty"
   const slot = {
     date: "2099-09-01",
     duration: { unit: "hour", amount: 1 } as const,
-    endsAt: "2099-09-01T09:00:00Z",
+    endsAt: instantStringSchema.make("2099-09-01T09:00:00Z"),
     startDateTime: "2099-09-01T10:00",
-    startsAt: "2099-09-01T08:00:00Z",
+    startsAt: instantStringSchema.make("2099-09-01T08:00:00Z"),
   };
   const tables = [
     makeMeetingRoomTable("room-a"),
@@ -49,9 +56,9 @@ test("validates an unpaid meeting-room hold without waiting for confirmation", (
   const slot = {
     date: "2099-09-01",
     duration: { unit: "hour", amount: 1 } as const,
-    endsAt: "2099-09-01T09:00:00Z",
+    endsAt: instantStringSchema.make("2099-09-01T09:00:00Z"),
     startDateTime: "2099-09-01T10:00",
-    startsAt: "2099-09-01T08:00:00Z",
+    startsAt: instantStringSchema.make("2099-09-01T08:00:00Z"),
   };
 
   expect(() =>
@@ -74,9 +81,9 @@ test("treats a held interval as unavailable when every meeting room is occupied"
   const slot = {
     date: "2099-09-01",
     duration: { unit: "hour", amount: 1 } as const,
-    endsAt: "2099-09-01T09:00:00Z",
+    endsAt: instantStringSchema.make("2099-09-01T09:00:00Z"),
     startDateTime: "2099-09-01T10:00",
-    startsAt: "2099-09-01T08:00:00Z",
+    startsAt: instantStringSchema.make("2099-09-01T08:00:00Z"),
   };
 
   expect(
@@ -118,13 +125,18 @@ const assertPublicMeetingRoomAvailability = ({
     paymentProvider: "nexi",
     timeouts: { ...workspaceE2ETimeouts, datasource: 1 },
   };
-  const fetchMock: typeof globalThis.fetch = (_input, _init) =>
-    Promise.resolve(
+  const fetchMock = Object.assign(
+    async () =>
       Response.json({
         meetingRoomUnavailable: publicUnavailable,
         unavailableDates: [],
-      })
-    );
+      }),
+    {
+      preconnect: () => {
+        throw new Error("Unexpected availability preconnect");
+      },
+    }
+  );
   const httpClientLayer = FetchHttpClient.layer.pipe(
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
   );
@@ -162,25 +174,30 @@ test.each([
   }
 );
 
-const makeMeetingRoomTable = (id: string): Table => ({
-  display: true,
-  enabled: true,
-  id,
-  name: id,
-  seats: "1",
-  tags: ["reservation:meeting-room"],
-});
+const makeMeetingRoomTable = (id: string) =>
+  Schema.decodeSync(DotyposTableSchema)({
+    _cloudId: "cloud",
+    display: true,
+    enabled: true,
+    id,
+    name: id,
+    seats: "1",
+    tags: ["reservation:meeting-room"],
+  });
 
-const makeMeetingRoomReservation = (tableId: string): Reservation => ({
-  _customerId: "customer-a",
-  _tableId: tableId,
-  endDate: "2099-09-01T09:00:00Z",
-  id: "reservation-a",
-  note: "Workspace reservation workspace-reservation-a",
-  seats: "1",
-  startDate: "2099-09-01T08:00:00Z",
-  status: "NEW",
-});
+const makeMeetingRoomReservation = (tableId: string) =>
+  Schema.decodeSync(DotyposReservationSchema)({
+    _branchId: "branch",
+    _cloudId: "cloud",
+    _customerId: "customer-a",
+    _tableId: tableId,
+    endDate: "2099-09-01T09:00:00Z",
+    id: "reservation-a",
+    note: "Workspace reservation workspace-reservation-a",
+    seats: "1",
+    startDate: "2099-09-01T08:00:00Z",
+    status: "NEW",
+  });
 
 const linkCaseConfig: WorkspaceE2EConfig = {
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
@@ -196,12 +213,18 @@ const linkCaseDatasourceConfig: DatasourceConfig = {
   dotypos: {
     apiTimeout: 5_000,
     apiUrl: "https://dotypos.example.test",
-    branchId: "branch",
-    clientId: "client",
+    branchId: DotyposBranchIdSchema.make("branch"),
+    clientId: DotyposClientIdSchema.make("client"),
     clientSecret: "client-secret",
-    cloudId: "cloud",
-    employeeId: "employee",
+    cloudId: DotyposCloudIdSchema.make("cloud"),
+    employeeId: DotyposEmployeeIdSchema.make("employee"),
     refreshToken: "refresh-token",
+  },
+  fixtureCapacityTarget: {
+    baseUrl: linkCaseConfig.baseUrl,
+    githubRunAttempt: undefined,
+    githubRunId: undefined,
+    targetSha: undefined,
   },
   expectedCurrency: "EUR",
   nexiApiOrigin: "https://xpaysandbox.nexigroup.com/api/phoenix-0.0/psp",
@@ -249,12 +272,16 @@ test("constructs reservation-link cases from the reserved preparation partition"
     [...expectedLinkCaseIds].sort()
   );
   for (const workspaceE2ECase of cases) {
-    expect(workspaceE2ENonPaymentCaseIds).toContain(workspaceE2ECase.id);
+    expect<readonly string[]>(workspaceE2ENonPaymentCaseIds).toContain(
+      workspaceE2ECase.id
+    );
   }
 
   const [enCase] = cases;
+  assert(enCase, "expected an English reservation-link case");
   expect(enCase.checkoutStates).toHaveLength(2);
   const [originalState, replacementState] = enCase.checkoutStates;
+  assert(originalState && replacementState, "expected both checkout states");
   expect(originalState.data).not.toBe(replacementState.data);
   expect(originalState.data.checkoutUrl).not.toBe(
     replacementState.data.checkoutUrl

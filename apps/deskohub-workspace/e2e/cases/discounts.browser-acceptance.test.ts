@@ -341,7 +341,7 @@ test.skipIf(!chromiumAvailable)(
               element.setAttribute("aria-describedby", "discount-tip")
             );
             element.addEventListener("keydown", (event) => {
-              if (event.key === "Escape") {
+              if (event instanceof KeyboardEvent && event.key === "Escape") {
                 element.removeAttribute("aria-describedby");
               }
             });

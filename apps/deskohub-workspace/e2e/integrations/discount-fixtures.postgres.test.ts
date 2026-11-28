@@ -14,9 +14,10 @@ const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const codeIds = Object.values(discountCodeFixtures).map(({ id }) => id);
 // Vouchers are the fixtures with per-run credit; they have no discount code.
-const voucherIds: readonly string[] = Object.values(discountCodeFixtures)
-  .filter((fixture) => "creditPerRun" in fixture)
-  .map(({ id }) => id);
+const voucherFixtures = Object.values(discountCodeFixtures).filter(
+  (fixture) => "creditPerRun" in fixture
+);
+const voucherIds: readonly string[] = voucherFixtures.map(({ id }) => id);
 const discountCodeIds = codeIds.filter((id) => !voucherIds.includes(id));
 
 describe.skipIf(!testDatabase)(
@@ -101,12 +102,12 @@ describe.skipIf(!testDatabase)(
         },
       ]);
       expect(seeded.issued).toEqual(
-        voucherIds.toSorted().map((id) => ({
-          id,
-          issued_amount_value: Object.values(discountCodeFixtures).find(
-            (fixture) => fixture.id === id && "creditPerRun" in fixture
-          )?.creditPerRun?.value,
-        }))
+        voucherFixtures
+          .map(({ id, creditPerRun }) => ({
+            id,
+            issued_amount_value: creditPerRun.value,
+          }))
+          .sort((left, right) => left.id.localeCompare(right.id))
       );
       expect(seeded.targets.length).toBeGreaterThan(0);
 

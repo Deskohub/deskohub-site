@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { DotyposUnavailable } from "@deskohub/dotypos";
 import type { Customer, Reservation } from "@deskohub/dotypos/generated";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
@@ -109,7 +110,13 @@ test("overlaps every detail read and retains all read failures", async () => {
         readBarrier.wait().pipe(
           Effect.flatMap(() =>
             reservationId === "reservation-2"
-              ? Effect.fail(new Error("detail read failed"))
+              ? Effect.fail(
+                  new DotyposUnavailable({
+                    operation: "getReservation",
+                    reason: "transport",
+                    message: "detail read failed",
+                  })
+                )
               : Effect.succeed({
                   customer: customer(),
                   reservation: reservation(reservationId),
@@ -140,15 +147,19 @@ test("overlaps independent cancellations and retains every failure", async () =>
   const report = await Effect.runPromise(
     reconcileStaleWorkspaceE2EReservations(interval, true, {
       cancelReservation: (reservationId) =>
-        cancellationBarrier
-          .wait()
-          .pipe(
-            Effect.flatMap(() =>
-              reservationId === "reservation-2"
-                ? Effect.fail(new Error("cancellation failed"))
-                : Effect.void
-            )
-          ),
+        cancellationBarrier.wait().pipe(
+          Effect.flatMap(() =>
+            reservationId === "reservation-2"
+              ? Effect.fail(
+                  new DotyposUnavailable({
+                    operation: "cancelReservation",
+                    reason: "transport",
+                    message: "cancellation failed",
+                  })
+                )
+              : Effect.void
+          )
+        ),
       listActiveReservations: () =>
         Effect.succeed([
           reservation("reservation-1"),
@@ -199,6 +210,7 @@ test("waits for successful cancellation convergence", async () => {
 });
 
 const customer = (overrides: Partial<Customer> = {}): Customer => ({
+  id: "testing-customer",
   _cloudId: "testing-cloud",
   deleted: false,
   display: true,
