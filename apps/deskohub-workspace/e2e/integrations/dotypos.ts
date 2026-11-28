@@ -22,11 +22,14 @@ import { Effect, Layer, Logger, Option, Schema } from "effect";
 import { HttpClient } from "effect/http";
 import { splitCustomerName } from "@/features/checkout/backend/reservation/dotypos-customer-policy";
 import {
+  workspaceCoworkOpenSpaceTableTag,
   workspaceMeetingRoomReservationTableTag,
   workspaceOfficeReservationTableTag,
+  workspaceTableReservationTableTag,
 } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import { defaultPhoneRegion } from "@/features/i18n/phone-region";
 import { getOfficeReservationSeatCapacity } from "@/features/office/backend/office-reservation-capacity";
+import { decodeTeamTableCandidates } from "@/features/team-table/backend/team-table-capacity";
 import type { DatasourceConfig } from "../config";
 import {
   toWorkspaceE2EError,
@@ -49,6 +52,7 @@ export interface E2EDotyposDiscountGroup {
 }
 
 export interface ValidatedDotyposReservation {
+  readonly assignedTableName?: string;
   readonly customer: Customer;
   readonly reservedFrom: Temporal.Instant;
   readonly reservedUntil: Temporal.Instant;
@@ -172,7 +176,7 @@ export const validateDotypos = (
       }
     );
     const exclusiveReservationTables =
-      data.meetingRoom || data.office
+      data.meetingRoom || data.office || data.table
         ? yield* Effect.gen(function* () {
             const dotypos = yield* DotyposService;
             return yield* dotypos.getTables();
@@ -187,78 +191,118 @@ export const validateDotypos = (
           )
         : [];
 
-    yield* tryWorkspaceE2ESync("assert Dotypos reservation state", () => {
-      assert(
-        result.reservation.status === "CONFIRMED",
-        "Dotypos reservation is not confirmed"
-      );
-      assert(
-        result.reservation._customerId === row.dotypos_customer_id,
-        "Dotypos customer mismatch"
-      );
-      assert(result.reservation._tableId, "Dotypos table id missing");
-      assert(
-        result.reservation.seats ===
-          String(data.office ? data.office.seats : 1),
-        "Dotypos reservation seats do not match the checkout"
-      );
-      assert(
-        result.reservation.note?.includes(row.reservation_id),
-        "Dotypos note missing workspace order id"
-      );
-      if (data.office) {
+    const assignedTableName = yield* tryWorkspaceE2ESync(
+      "assert Dotypos reservation state",
+      () => {
         assert(
-          dotyposTimestampMatches(
-            result.reservation.startDate,
-            data.office.startsAt
-          ),
-          "Dotypos office start does not match the selected first day"
+          result.reservation.status === "CONFIRMED",
+          "Dotypos reservation is not confirmed"
         );
         assert(
-          dotyposTimestampMatches(
-            result.reservation.endDate,
-            data.office.endsAt
-          ),
-          "Dotypos office end does not match the selected last day"
+          result.reservation._customerId === row.dotypos_customer_id,
+          "Dotypos customer mismatch"
         );
-        const assignedTable = exclusiveReservationTables.find(
-          (table) => table.id === result.reservation._tableId
+        assert(result.reservation._tableId, "Dotypos table id missing");
+        const expectedSeats = data.office?.seats ?? data.table?.seats ?? 1;
+        assert(
+          result.reservation.seats === String(expectedSeats),
+          "Dotypos reservation seats do not match the checkout"
         );
         assert(
-          assignedTable?.enabled === true && assignedTable.display === true,
-          "Dotypos office table is not active and visible"
+          result.reservation.note?.includes(row.reservation_id),
+          "Dotypos note missing workspace order id"
         );
-        assert(
-          assignedTable.tags?.includes(workspaceOfficeReservationTableTag),
-          "Dotypos reservation is not assigned to an office table"
-        );
-      } else if (data.meetingRoom) {
-        assert(
-          dotyposTimestampMatches(
-            result.reservation.startDate,
-            data.meetingRoom.startsAt
-          ),
-          "Dotypos meeting-room start does not match the selected time"
-        );
-        assert(
-          dotyposTimestampMatches(
-            result.reservation.endDate,
-            data.meetingRoom.endsAt
-          ),
-          "Dotypos meeting-room end does not match the selected time"
-        );
-        const assignedTable = exclusiveReservationTables.find(
-          (table) => table.id === result.reservation._tableId
-        );
-        assert(
-          assignedTable?.enabled === true && assignedTable.display === true,
-          "Dotypos meeting-room table is not active and visible"
-        );
-        assert(
-          assignedTable.tags?.includes(workspaceMeetingRoomReservationTableTag),
-          "Dotypos reservation is not assigned to a meeting-room table"
-        );
-      } else {
+        if (data.office) {
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.startDate,
+              data.office.startsAt
+            ),
+            "Dotypos office start does not match the selected first day"
+          );
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.endDate,
+              data.office.endsAt
+            ),
+            "Dotypos office end does not match the selected last day"
+          );
+          const assignedTable = exclusiveReservationTables.find(
+            (table) => table.id === result.reservation._tableId
+          );
+          assert(
+            assignedTable?.enabled === true && assignedTable.display === true,
+            "Dotypos office table is not active and visible"
+          );
+          assert(
+            assignedTable.tags?.includes(workspaceOfficeReservationTableTag),
+            "Dotypos reservation is not assigned to an office table"
+          );
+          return assignedTable.name?.trim() || undefined;
+        }
+        if (data.table) {
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.startDate,
+              data.table.startsAt
+            ),
+            "Dotypos Team Table start does not match the selected time"
+          );
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.endDate,
+              data.table.endsAt
+            ),
+            "Dotypos Team Table end does not match the selected time"
+          );
+          const assignedTable = exclusiveReservationTables.find(
+            (table) => table.id === result.reservation._tableId
+          );
+          assert(
+            assignedTable?.enabled === true && assignedTable.display === true,
+            "Dotypos Team Table is not active and visible"
+          );
+          assert(
+            assignedTable.tags?.includes(workspaceCoworkOpenSpaceTableTag) &&
+              assignedTable.tags?.includes(workspaceTableReservationTableTag),
+            "Dotypos reservation is not assigned to a Team Table"
+          );
+          assert(
+            Number(assignedTable.seats) === data.table.seats,
+            "Dotypos Team Table seat capacity does not match the booked size"
+          );
+          return assignedTable.name?.trim() || undefined;
+        }
+        if (data.meetingRoom) {
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.startDate,
+              data.meetingRoom.startsAt
+            ),
+            "Dotypos meeting-room start does not match the selected time"
+          );
+          assert(
+            dotyposTimestampMatches(
+              result.reservation.endDate,
+              data.meetingRoom.endsAt
+            ),
+            "Dotypos meeting-room end does not match the selected time"
+          );
+          const assignedTable = exclusiveReservationTables.find(
+            (table) => table.id === result.reservation._tableId
+          );
+          assert(
+            assignedTable?.enabled === true && assignedTable.display === true,
+            "Dotypos meeting-room table is not active and visible"
+          );
+          assert(
+            assignedTable.tags?.includes(
+              workspaceMeetingRoomReservationTableTag
+            ),
+            "Dotypos reservation is not assigned to a meeting-room table"
+          );
+          return assignedTable.name?.trim() || undefined;
+        }
         assert(
           dotyposDateCovers(
             result.reservation.startDate,
@@ -267,13 +311,15 @@ export const validateDotypos = (
           ),
           "Dotypos date does not cover selected checkout date"
         );
+        return undefined;
       }
-    });
+    );
     log("Dotypos reservation state validated");
 
     return yield* tryWorkspaceE2ESync(
       "read validated Dotypos reservation details",
       () => ({
+        ...(assignedTableName ? { assignedTableName } : {}),
         customer: result.customer,
         reservedFrom: parseDotyposInstant(result.reservation.startDate),
         reservedUntil: parseDotyposInstant(result.reservation.endDate),
@@ -614,6 +660,39 @@ export const loadDotyposOfficeSeatCapacity = (
     Effect.provide(getDotyposLayer(config)),
     Effect.mapError((cause) =>
       toWorkspaceE2EError("load Dotypos office seat capacity", cause)
+    )
+  );
+
+export interface E2EDotyposTableSeatInventory {
+  readonly capacities: readonly number[];
+  readonly tableCountBySeats: Readonly<Record<number, number>>;
+}
+
+/**
+ * The Team Table seat sizes and per-size table counts the reservation page
+ * offers, read through the same candidate decoder the page loader uses.
+ */
+export const loadDotyposTableSeatInventory = (
+  config: DatasourceConfig
+): Effect.Effect<E2EDotyposTableSeatInventory, WorkspaceE2EError> =>
+  Effect.gen(function* () {
+    const dotypos = yield* DotyposService;
+    const candidates = yield* Effect.fromResult(
+      decodeTeamTableCandidates(yield* dotypos.getTables())
+    );
+    const tableCountBySeats: Record<number, number> = {};
+    for (const { seatCapacity } of candidates) {
+      tableCountBySeats[seatCapacity] =
+        (tableCountBySeats[seatCapacity] ?? 0) + 1;
+    }
+    const capacities = Object.keys(tableCountBySeats)
+      .map(Number)
+      .sort((left, right) => left - right);
+    return { capacities, tableCountBySeats };
+  }).pipe(
+    Effect.provide(getDotyposLayer(config)),
+    Effect.mapError((cause) =>
+      toWorkspaceE2EError("load Dotypos Team Table seat capacities", cause)
     )
   );
 

@@ -31,6 +31,12 @@ const directNavigationCases = [
     releaseMarker: "data-office-base-price",
     shellName: "Reserve a private office.",
   },
+  {
+    contentName: "Reservation date",
+    path: "/en-US/reservation/table",
+    releaseMarker: "data-table-reservation-form",
+    shellName: "Checking workspace availability...",
+  },
 ] as const;
 
 for (const navigation of directNavigationCases) {

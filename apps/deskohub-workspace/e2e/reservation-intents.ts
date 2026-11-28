@@ -70,10 +70,14 @@ export const recordReservationIntent = Effect.fn("E2E.recordReservationIntent")(
 );
 
 export const recordCheckoutIntent = (data: CheckoutData) => {
-  let selected: CheckoutData["meetingRoom"] | CheckoutData["office"];
+  let selected:
+    | CheckoutData["meetingRoom"]
+    | CheckoutData["office"]
+    | CheckoutData["table"];
   const kind = data.expectedReservationDetails.kind;
   if (kind === "meeting-room") selected = data.meetingRoom;
   if (kind === "office") selected = data.office;
+  if (kind === "table") selected = data.table;
   if (kind !== "cowork" && !selected) {
     return Effect.fail(
       workspaceE2EError("Reservation interval coverage is unknown")

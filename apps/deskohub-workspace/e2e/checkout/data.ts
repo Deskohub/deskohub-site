@@ -27,6 +27,14 @@ import { reservationCustomerQueryParam } from "@/features/reservation/reservatio
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { ReservationInterval } from "@/features/reservation/reservation-interval-domain";
 import {
+  getTableReservationDurationMinutes,
+  getTableReservationInterval,
+} from "@/features/reservation/table-reservation-time";
+import {
+  parseTableSlotsResponse,
+  type TableSlotsAvailability,
+} from "@/features/reservation/workspace-availability";
+import {
   formatWorkspaceE2EAllocation,
   getWorkspaceE2ECandidateDate,
   isWorkspaceE2EAllocatedWeekday,
@@ -46,6 +54,12 @@ import {
   workspaceE2EOfficeReservationSeats,
 } from "../office";
 import { assert, log } from "../runtime";
+import {
+  getWorkspaceE2ETableCheckoutInvitees,
+  workspaceE2ETableMinimumDurationMinutes,
+  workspaceE2ETablePreferredEndTime,
+  workspaceE2ETablePreferredStartTime,
+} from "../table";
 import type { CheckoutData, CheckoutFlow } from "../types";
 import { toReservationStep } from "./reservation-form-preparation";
 
@@ -99,6 +113,15 @@ export type OfficeCheckoutSlot = {
 export type OfficeAvailability = {
   readonly officeUnavailable: boolean;
   readonly unavailableDates: readonly string[];
+};
+
+export type TableCheckoutSlot = {
+  readonly date: string;
+  readonly endsAt: ReservationInterval["endsAt"];
+  readonly endTime: string;
+  readonly seats: number;
+  readonly startsAt: ReservationInterval["startsAt"];
+  readonly startTime: string;
 };
 
 export type CoworkAvailabilitySelection = {
@@ -240,6 +263,34 @@ export const makeOfficeCheckoutData = (
     office: slot,
     orderIdHint: "",
     phone: contact.phone,
+  };
+};
+
+export const makeTableCheckoutData = (
+  checkoutBaseUrl: string,
+  slot: TableCheckoutSlot,
+  flowId = "table-paid"
+): CheckoutData => {
+  const contact = makeCheckoutContact(flowId);
+  const locale: CheckoutData["locale"] = "en-US";
+
+  return {
+    checkoutUrl: `${checkoutBaseUrl}/${locale}/reservation/table?${someoneElseCustomerQuery}`,
+    date: slot.date,
+    email: contact.email,
+    expectedReservationDetails: {
+      kind: "table",
+      seats: slot.seats,
+      durationMinutes: getTableReservationDurationMinutes(slot),
+    },
+    locale,
+    name: contact.name,
+    orderIdHint: "",
+    phone: contact.phone,
+    table: {
+      ...slot,
+      checkoutInvitees: getWorkspaceE2ETableCheckoutInvitees(slot.seats),
+    },
   };
 };
 
@@ -403,34 +454,11 @@ export const loadAvailableCoworkDates = (
     const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
     const params = new URLSearchParams({ entryTier, from, to });
     if (monitorOption) params.set("monitorOption", monitorOption);
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch workspace availability dates", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(`availability check failed with ${status}`, {
-            operation: "fetch workspace availability dates",
-          })
-      )
-    );
-
-    const availability = yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read workspace availability response", cause)
-      )
-    );
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch workspace availability dates",
+      readOperation: "read workspace availability response",
+      statusMessage: (status) => `availability check failed with ${status}`,
+    });
     const unavailable = yield* tryWorkspaceE2ESync(
       "parse workspace availability dates",
       () => new Set(parseUnavailableDates(availability))
@@ -701,33 +729,12 @@ export const loadOfficeAvailability = (
       endsAt: slot.endsAt,
       seats: String(slot.seats),
     });
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch office availability", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(`office availability check failed with ${status}`, {
-            operation: "fetch office availability",
-          })
-      )
-    );
-    const availability = yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read office availability response", cause)
-      )
-    );
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch office availability",
+      readOperation: "read office availability response",
+      statusMessage: (status) =>
+        `office availability check failed with ${status}`,
+    });
 
     return yield* tryWorkspaceE2ESync("parse office availability", () => {
       const { officeUnavailable } = requireAvailabilityField(
@@ -776,34 +783,12 @@ export const loadMeetingRoomAvailability = (
       startsAt: slot.startsAt,
       endsAt: slot.endsAt,
     });
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch meeting-room availability", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(
-            `meeting-room availability check failed with ${status}`,
-            { operation: "fetch meeting-room availability" }
-          )
-      )
-    );
-    const availability = yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read meeting-room availability response", cause)
-      )
-    );
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch meeting-room availability",
+      readOperation: "read meeting-room availability response",
+      statusMessage: (status) =>
+        `meeting-room availability check failed with ${status}`,
+    });
 
     return yield* tryWorkspaceE2ESync("parse meeting-room availability", () => {
       const { meetingRoomUnavailable } = requireAvailabilityField(
@@ -831,3 +816,204 @@ const getTouchedDates = (slot: MeetingRoomCheckoutSlot) => {
   if (endDate !== slot.date) dates.push(endDate);
   return dates;
 };
+
+/**
+ * Selects `count` available Team Table slots on distinct weekday dates inside
+ * the allocation shard, preferring `10:00` through `12:00` and falling back
+ * to the earliest open slot of at least `workspaceE2ETableMinimumDurationMinutes`.
+ */
+export const selectAvailableTableSlots = (
+  config: WorkspaceE2EConfig,
+  seats: number,
+  count: number,
+  allocation: WorkspaceE2EDateAllocation = workspaceE2EFullDateAllocation
+): Effect.Effect<
+  readonly TableCheckoutSlot[],
+  WorkspaceE2EError,
+  HttpClient.HttpClient
+> =>
+  Effect.gen(function* () {
+    const unavailableDates = yield* loadTableUnavailableDates(
+      config,
+      seats,
+      allocation
+    );
+    const allocatedDates = Array.from(
+      { length: allocation.toOffsetDays - allocation.fromOffsetDays + 1 },
+      (_, index) =>
+        getWorkspaceE2ECandidateDate(allocation.fromOffsetDays + index)
+    ).filter(
+      (date) =>
+        isWorkspaceE2EAllocatedWeekday(date, allocation) &&
+        !unavailableDates.has(date)
+    );
+
+    const slots: TableCheckoutSlot[] = [];
+    for (const date of allocatedDates) {
+      const availability = yield* loadTableSlots(config, date, seats);
+      const selected = pickTableSlotFromAvailability(date, seats, availability);
+      if (!selected) continue;
+      log(
+        `Selected available ${seats}-seat Team Table slot ${selected.date} ${selected.startTime}-${selected.endTime}`
+      );
+      slots.push(selected);
+      if (slots.length === count) return slots;
+    }
+
+    return yield* workspaceE2EError(
+      `Only found ${slots.length} available reservation:table slots for ${seats} seats in ${formatWorkspaceE2EAllocation(allocation)} for supported concurrency ${workspaceE2EConcurrentRunTarget}, need ${count}`,
+      { operation: "select available Team Table checkout slots" }
+    );
+  });
+
+const pickTableSlotFromAvailability = (
+  date: string,
+  seats: number,
+  availability: TableSlotsAvailability
+): TableCheckoutSlot | undefined => {
+  const preferred = availability.availableEndsByStart.find(
+    (entry) =>
+      entry.startTime === workspaceE2ETablePreferredStartTime &&
+      entry.endTimes.includes(workspaceE2ETablePreferredEndTime)
+  );
+  if (preferred) {
+    const interval = getTableReservationInterval(
+      date,
+      workspaceE2ETablePreferredStartTime,
+      workspaceE2ETablePreferredEndTime
+    );
+    if (interval) {
+      return {
+        date,
+        seats,
+        startTime: workspaceE2ETablePreferredStartTime,
+        endTime: workspaceE2ETablePreferredEndTime,
+        startsAt: interval.startsAt,
+        endsAt: interval.endsAt,
+      };
+    }
+  }
+
+  let fallback: TableCheckoutSlot | undefined;
+  for (const entry of availability.availableEndsByStart) {
+    for (const endTime of entry.endTimes) {
+      const interval = getTableReservationInterval(
+        date,
+        entry.startTime,
+        endTime
+      );
+      if (!interval) continue;
+      const candidate: TableCheckoutSlot = {
+        date,
+        seats,
+        startTime: entry.startTime,
+        endTime,
+        startsAt: interval.startsAt,
+        endsAt: interval.endsAt,
+      };
+      if (
+        getTableReservationDurationMinutes(interval) >=
+        workspaceE2ETableMinimumDurationMinutes
+      ) {
+        return candidate;
+      }
+      fallback ??= candidate;
+    }
+  }
+  return fallback;
+};
+
+const fetchWorkspaceAvailabilityJson = (
+  config: WorkspaceE2EConfig,
+  params: URLSearchParams,
+  {
+    fetchOperation,
+    readOperation,
+    statusMessage,
+  }: {
+    readonly fetchOperation: string;
+    readonly readOperation: string;
+    readonly statusMessage: (status: number) => string;
+  }
+): Effect.Effect<unknown, WorkspaceE2EError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const httpClient = yield* HttpClient.HttpClient;
+    const request = HttpClientRequest.get(
+      `${config.baseUrl}/api/workspace/availability?${params}`
+    ).pipe(
+      HttpClientRequest.setHeaders(
+        config.bypassSecret
+          ? { "x-vercel-protection-bypass": config.bypassSecret }
+          : {}
+      )
+    );
+    const response = yield* httpClient.execute(request).pipe(
+      Effect.mapError((cause) => toWorkspaceE2EError(fetchOperation, cause)),
+      Effect.filterOrFail(
+        ({ status }) => status >= 200 && status < 300,
+        ({ status }) =>
+          workspaceE2EError(statusMessage(status), {
+            operation: fetchOperation,
+          })
+      )
+    );
+    return yield* response.json.pipe(
+      Effect.mapError((cause) => toWorkspaceE2EError(readOperation, cause))
+    );
+  });
+
+const loadTableUnavailableDates = (
+  config: WorkspaceE2EConfig,
+  seats: number,
+  allocation: WorkspaceE2EDateAllocation
+): Effect.Effect<
+  ReadonlySet<string>,
+  WorkspaceE2EError,
+  HttpClient.HttpClient
+> =>
+  Effect.gen(function* () {
+    const from = getWorkspaceE2ECandidateDate(allocation.fromOffsetDays);
+    const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
+    const params = new URLSearchParams({
+      kind: "table",
+      from,
+      to,
+      seats: String(seats),
+    });
+    const availability = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch Team Table availability dates",
+      readOperation: "read Team Table availability response",
+      statusMessage: (status) =>
+        `Team Table availability check failed with ${status}`,
+    });
+    return yield* tryWorkspaceE2ESync(
+      "parse Team Table availability dates",
+      () => new Set(parseUnavailableDates(availability))
+    );
+  });
+
+export const loadTableSlots = (
+  config: WorkspaceE2EConfig,
+  date: string,
+  seats: number
+): Effect.Effect<
+  TableSlotsAvailability,
+  WorkspaceE2EError,
+  HttpClient.HttpClient
+> =>
+  Effect.gen(function* () {
+    const params = new URLSearchParams({
+      kind: "table",
+      mode: "table-slots",
+      date,
+      seats: String(seats),
+    });
+    const body = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch Team Table slots",
+      readOperation: "read Team Table slots response",
+      statusMessage: (status) => `Team Table slots check failed with ${status}`,
+    });
+    return yield* tryWorkspaceE2ESync("parse Team Table slots", () =>
+      parseTableSlotsResponse(body)
+    );
+  });

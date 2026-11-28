@@ -103,7 +103,7 @@ export const makeOfficeE2ECases = ({
             config,
             data,
             datasourceConfig,
-            expectedOfficeInvitees: getWorkspaceE2EOfficeInvitees(
+            expectedReservationInvitees: getWorkspaceE2EOfficeInvitees(
               preparation.slot.seats
             ),
             flow: {

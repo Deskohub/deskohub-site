@@ -23,7 +23,8 @@ import { checkoutFlows } from "./data";
  * booker: a verified account linked to its own synthetic profile, seeded
  * without a magic link. Bookers book for someone else, the case's own planned
  * contact, so each order keeps its unique customer, except the plain
- * checkout flows, which book as the account.
+ * checkout flows and cases that opt into `bindAccountContact`, which book as
+ * the account.
  *
  * Cases that never submit a reservation stay signed out, and referral cases,
  * the someone-else referral payment, the signed-out verification case, and
@@ -41,6 +42,7 @@ const signedOutCaseIds = [
   "reservation-url-state-meeting-room",
   "reservation-url-state-office",
   "reservation-url-state-office-starts-on-link",
+  "reservation-url-state-table",
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 const ownIdentityCaseIds = [
@@ -118,13 +120,16 @@ export const bindWorkspaceE2ECheckoutBooker = async ({
 
   const flow = accountBookingFlows.get(testCase.id);
   if (!flow) {
+    const boundCase = testCase.bindAccountContact
+      ? testCase.bindAccountContact(identities.describe(label))
+      : testCase;
     return {
-      ...testCase,
+      ...boundCase,
       execute: Effect.fn("CheckoutBooker.execute")(function* (
         context: WorkspaceE2ECaseContext
       ) {
         yield* signIn(context);
-        yield* testCase.execute(context);
+        yield* boundCase.execute(context);
       }),
     };
   }

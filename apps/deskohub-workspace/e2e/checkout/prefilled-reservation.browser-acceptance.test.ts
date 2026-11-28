@@ -11,7 +11,9 @@ import {
   makeCoworkCheckoutData,
   makeMeetingRoomCheckoutData,
   makeOfficeCheckoutData,
+  makeTableCheckoutData,
   type OfficeCheckoutSlot,
+  type TableCheckoutSlot,
 } from "./data";
 import {
   isPrefilledReservation,
@@ -362,5 +364,58 @@ test.skipIf(!chromiumAvailable)(
       });
     expect(await isPrefilledOn(repeated(data.email), data)).toBe(true);
     expect(await isPrefilledOn(repeated(otherContact.email), data)).toBe(false);
+  }
+);
+
+const tableSlot: TableCheckoutSlot = {
+  date: "2099-09-01",
+  endsAt: instantStringSchema.make("2099-09-01T10:00:00Z"),
+  endTime: "12:00",
+  seats: 4,
+  startsAt: instantStringSchema.make("2099-09-01T08:00:00Z"),
+  startTime: "10:00",
+};
+
+test.skipIf(!chromiumAvailable)(
+  "checks restored Team Table size, date, times, and people",
+  async () => {
+    const data = makeTableCheckoutData(origin, tableSlot);
+    const selection = ({
+      date = "2099-09-01",
+      endTime = "12:00",
+      people = "2",
+      seats = "4",
+      startTime = "10:00",
+    } = {}) => `
+      <input checked name="seats" type="radio" value="${seats}" />
+      <input name="date" value="${date}" />
+      <select name="startTime">
+        <option value="10:00" ${startTime === "10:00" ? "selected" : ""}>10:00 AM</option>
+        <option value="11:00" ${startTime === "11:00" ? "selected" : ""}>11:00 AM</option>
+      </select>
+      <select name="endTime">
+        <option value="12:00" ${endTime === "12:00" ? "selected" : ""}>12:00 PM</option>
+        <option value="13:00" ${endTime === "13:00" ? "selected" : ""}>1:00 PM</option>
+      </select>
+      <span data-office-people-count>${people} of 4</span>`;
+
+    expect(await isPrefilledOn(selection() + contactHtml(data), data)).toBe(
+      true
+    );
+    expect(
+      await isPrefilledOn(selection({ seats: "2" }) + contactHtml(data), data)
+    ).toBe(false);
+    expect(
+      await isPrefilledOn(
+        selection({ endTime: "13:00" }) + contactHtml(data),
+        data
+      )
+    ).toBe(false);
+    expect(
+      await isPrefilledOn(selection({ people: "1" }), data, {
+        includeContact: false,
+        officePeople: "contact-only",
+      })
+    ).toBe(true);
   }
 );

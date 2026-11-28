@@ -291,7 +291,7 @@ export function TableReservationForm({
         control={form.control}
         name="seats"
         render={({ field }) => (
-          <FormItem>
+          <FormItem data-table-reservation-form="">
             <ReservationFormLabel id={sizeLabelId} required>
               {m.reservationTableSize({}, { locale })}
             </ReservationFormLabel>

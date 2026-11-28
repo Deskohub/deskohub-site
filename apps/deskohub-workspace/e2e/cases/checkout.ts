@@ -7,6 +7,7 @@ import { isMeetingRoomWholeDayReservationDuration } from "@/features/reservation
 import {
   formatReservationDisplayDate,
   formatReservationDisplayDateRange,
+  formatReservationDisplayDateTimeRange,
   formatReservationDisplayTimeRange,
 } from "@/features/reservation/reservation-date";
 import { isSingleDayReservationInterval } from "@/features/reservation/reservation-interval-domain";
@@ -124,7 +125,7 @@ export const executeCheckoutFlow = (
     payPageSteps,
     beforeReservationSubmit,
     expectedDiscounts,
-    expectedOfficeInvitees,
+    expectedReservationInvitees,
     afterFulfillment,
     verifyPostFulfillmentPaths = false,
   }: {
@@ -141,12 +142,13 @@ export const executeCheckoutFlow = (
     ) => readonly WorkspaceE2EStep<void, E2EDatabase>[];
     beforeReservationSubmit?: Effect.Effect<void, WorkspaceE2EError>;
     expectedDiscounts?: readonly ExpectedDiscountApplication[];
-    /** Present for an office booked with an attendee list, even with no invitees. */
-    expectedOfficeInvitees?: readonly string[];
+    /** Present for an office or Team Table booked with an attendee list, even with no invitees. */
+    expectedReservationInvitees?: readonly string[];
     // Checks on the fulfilled reservation beyond the status page, before any
     // post-fulfillment path changes it.
     afterFulfillment?: (
-      orderId: CheckoutRow["reservation_id"]
+      orderId: CheckoutRow["reservation_id"],
+      dotyposReservation: ValidatedDotyposReservation
     ) => Effect.Effect<void, WorkspaceE2EError, E2EDatabase>;
     // The reserve-again restart, the fulfillment-failed support path, and the
     // reservation status isolation that starts from that support path do not
@@ -264,14 +266,14 @@ export const executeCheckoutFlow = (
         config,
         data,
         dotyposReservation,
-        expectedOfficeInvitees,
+        expectedReservationInvitees,
         orderId,
         openSession,
       }),
       id: "assert-fulfilled-status-page",
       timeoutMs: config.timeouts.uiTransition,
     });
-    if (afterFulfillment) yield* afterFulfillment(orderId);
+    if (afterFulfillment) yield* afterFulfillment(orderId, dotyposReservation);
     if (verifyPostFulfillmentPaths) {
       yield* check({
         execute: restartReservationAfterFulfillment({
@@ -792,7 +794,7 @@ export const assertFulfilledStatusPage = ({
   config,
   data,
   dotyposReservation,
-  expectedOfficeInvitees,
+  expectedReservationInvitees,
   orderId,
   openSession,
 }: {
@@ -808,12 +810,13 @@ export const assertFulfilledStatusPage = ({
       "duration"
     >;
     readonly office?: Pick<NonNullable<CheckoutData["office"]>, "seats">;
+    readonly table?: Pick<NonNullable<CheckoutData["table"]>, "seats">;
   };
   dotyposReservation: Pick<
     ValidatedDotyposReservation,
-    "reservedFrom" | "reservedUntil"
+    "assignedTableName" | "reservedFrom" | "reservedUntil"
   >;
-  expectedOfficeInvitees?: readonly string[];
+  expectedReservationInvitees?: readonly string[];
   orderId: CheckoutRow["reservation_id"];
   openSession: OpenE2EBrowserSession;
 }): Effect.Effect<void, WorkspaceE2EError> =>
@@ -868,9 +871,24 @@ export const assertFulfilledStatusPage = ({
               dotyposReservation.reservedUntil,
               data.locale
             ),
-            ...(expectedOfficeInvitees === undefined
+            ...(expectedReservationInvitees === undefined
               ? ["Seats", String(data.office.seats)]
               : ["Who is coming"]),
+            expectedPaymentPrice,
+          ];
+        }
+        if (data.table) {
+          return [
+            "Team Table",
+            ...(dotyposReservation.assignedTableName
+              ? [dotyposReservation.assignedTableName]
+              : []),
+            formatReservationDisplayDateTimeRange(
+              dotyposReservation.reservedFrom,
+              dotyposReservation.reservedUntil,
+              data.locale
+            ),
+            "Who is coming",
             expectedPaymentPrice,
           ];
         }
@@ -914,13 +932,27 @@ export const assertFulfilledStatusPage = ({
       session: browser,
       timeoutMs: config.timeouts.uiTransition,
     });
+    let expectedPeople:
+      | { readonly count: number; readonly invitees: readonly string[] }
+      | undefined;
+    if (expectedReservationInvitees !== undefined) {
+      if (data.office) {
+        expectedPeople = {
+          count: data.office.seats,
+          invitees: expectedReservationInvitees,
+        };
+      } else if (data.table) {
+        expectedPeople = {
+          count: 1 + expectedReservationInvitees.length,
+          invitees: expectedReservationInvitees,
+        };
+      }
+    }
     yield* assertPageCheck(
       browser,
       "assert fulfilled checkout status page",
       findFulfilledStatusPageProblem,
-      data.office && expectedOfficeInvitees !== undefined
-        ? { count: data.office.seats, invitees: expectedOfficeInvitees }
-        : undefined,
+      expectedPeople,
       { timeoutMs: config.timeouts.browserAction }
     );
     log("Checkout status page validated");
@@ -930,7 +962,7 @@ export const assertFulfilledStatusPage = ({
  * Runs in the browser: why the page is not the canonical fulfilled checkout
  * status page, or `null` when it is. It must not close over anything.
  */
-export const findFulfilledStatusPageProblem = (officePeople?: {
+export const findFulfilledStatusPageProblem = (reservationPeople?: {
   readonly count: number;
   readonly invitees: readonly string[];
 }): string | null => {
@@ -944,17 +976,17 @@ export const findFulfilledStatusPageProblem = (officePeople?: {
       return "checkout status rendered in a reservation dialog";
     }
   }
-  if (officePeople) {
+  if (reservationPeople) {
     const rows = Array.from(
       document.querySelectorAll("[data-office-status-people] > ul > li")
     );
-    if (rows.length !== officePeople.count) {
+    if (rows.length !== reservationPeople.count) {
       return "office attendee count does not match the booking";
     }
     const labels = rows.map((row) =>
       row.firstElementChild?.textContent?.trim()
     );
-    if (!officePeople.invitees.every((email) => labels.includes(email))) {
+    if (!reservationPeople.invitees.every((email) => labels.includes(email))) {
       return "office status is missing an expected invitee";
     }
   }
