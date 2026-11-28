@@ -11,7 +11,10 @@ import { admitReferralNexiPayment } from "@/features/checkout/backend/repositori
 import { PaymentTerminalTransitions } from "@/features/checkout/backend/repositories/payment-terminal-transitions";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { E2EDatabase } from "../integrations/database.service";
 import {
   nexiSandboxRejectedFailureCode,
@@ -21,7 +24,9 @@ import {
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const admitPayment = () =>
-  Effect.runPromise(admitReferralNexiPayment(testDatabase!));
+  Effect.runPromise(
+    admitReferralNexiPayment(requireTestDatabase(testDatabase))
+  );
 
 const retire = (
   orderId: WorkspaceReservationId,
@@ -30,14 +35,14 @@ const retire = (
   retireRejectedAttempt(orderId, paymentAttemptId).pipe(
     Effect.provideService(
       E2EDatabase,
-      E2EDatabase.of({ db: testDatabase!.db })
+      E2EDatabase.of({ db: requireTestDatabase(testDatabase).db })
     ),
     Effect.result,
     Effect.runPromise
   );
 
 const readClaim = async (paymentAttemptId: PaymentAttemptId) => {
-  const { rows } = await testDatabase!.pool.query<{
+  const { rows } = await requireTestDatabase(testDatabase).pool.query<{
     state: ReferralInvitationClaimState;
     release_reason: string | null;
   }>(
@@ -85,7 +90,7 @@ describe.skipIf(!testDatabase)(
         ).pipe(
           Effect.provide(
             PaymentTerminalTransitions.Default.pipe(
-              Layer.provide(testDatabase!.layer)
+              Layer.provide(requireTestDatabase(testDatabase).layer)
             )
           ),
           Effect.runPromise
@@ -108,7 +113,8 @@ describe.skipIf(!testDatabase)(
 
     test("reports a claim the app refuses to release as an E2E error", async () => {
       const { attempt, reservation } = await admitPayment();
-      await testDatabase!.pool.query(
+      const { pool } = requireTestDatabase(testDatabase);
+      await pool.query(
         "update referral_invitation_claims set state = 'redeemed', redeemed_at = now() where payment_attempt_id = $1",
         [attempt.id]
       );
@@ -123,7 +129,7 @@ describe.skipIf(!testDatabase)(
           cause: { _tag: "DiscountClaimError", reason: "claim_conflict" },
         },
       });
-      const { rows } = await testDatabase!.pool.query<{
+      const { rows } = await pool.query<{
         state: PaymentAttemptState;
       }>("select state from payment_attempts where id = $1", [attempt.id]);
       expect(rows).toEqual([{ state: attempt.state }]);

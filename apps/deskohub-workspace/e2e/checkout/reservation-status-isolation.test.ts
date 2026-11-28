@@ -1,29 +1,41 @@
 import "../../shared/polyfills/temporal";
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { type Browser, chromium } from "@playwright/test";
 import { Effect, Exit, Scope } from "effect";
-import { customerAccounts } from "@/db/schema/customer-accounts";
 import { m } from "@/features/i18n";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { E2EBrowserSession } from "../browser-session";
 import { runE2ECase } from "../case-runner";
 import type { WorkspaceE2EConfig } from "../config";
 import { isWorkspaceE2ETimeout, type WorkspaceE2EError } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
 import {
   type E2ETelemetryObservation,
   makeE2ETelemetryMock,
 } from "../services/telemetry.mock";
 import { workspaceE2ETimeouts } from "../timeouts";
-import type { CheckoutRow } from "../types";
-import { assertReservationStatusIsolation } from "./reservation-status-isolation";
+import {
+  type WorkspaceE2ELocalReservationDatabase,
+  withWorkspaceE2ELocalReservationFixture,
+} from "./local-reservation-fixture";
+import {
+  assertReservationStatusIsolation,
+  type ReservationStatusIsolationDatabase,
+} from "./reservation-status-isolation";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 
-const orderId = "019f70bd-0131-7f30-9f8a-48e768f00292";
-const customerId = "dotypos-customer-paid";
+const orderId = workspaceReservationIdSchema.make(
+  "019f70bd-0131-7f30-9f8a-48e768f00292"
+);
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer-paid");
 const targetStatusPath = `/en-US/reservation/status/${orderId}`;
 const signInPath = "/en-US/auth/sign-in";
 const bookingSession = "meeting-room-paid-test";
@@ -35,13 +47,6 @@ const caseWatchdogMs = 60_000;
 // The watchdog, then the case Scope's bounded browser close, with headroom.
 const testTimeoutMs =
   caseWatchdogMs + workspaceE2ETimeouts.browserAction + 15_000;
-
-const targetRow = {
-  dotypos_customer_id: customerId,
-  fulfillment_state: "failed",
-  payment_state: "paid",
-  reservation_id: orderId,
-} as CheckoutRow;
 
 /**
  * How the synthetic Workspace answers status requests: `scoped` is the real
@@ -152,72 +157,46 @@ afterAll(async () => {
  * its delete, so the fixture's cleanup check fails.
  */
 const makeDatabase = ({ cleanupConverges = true } = {}) => {
-  const rows = new Map<string, unknown>([[orderId, targetRow]]);
-  let lastInsertedId: string | undefined;
-
-  const makeSelect = (selection: Record<string, unknown>) => {
-    if (Object.hasOwn(selection, "reservation_id")) {
-      const query = {
-        from: () => query,
-        leftJoin: () => query,
-        where: () => ({
-          limit: () => Effect.succeed(rows.has(orderId) ? [targetRow] : []),
-        }),
-      };
-      return query;
-    }
-
-    return {
-      from: () => ({
-        where: () =>
-          Effect.sync(() =>
-            lastInsertedId && rows.has(lastInsertedId)
-              ? [{ id: lastInsertedId }]
-              : []
-          ),
+  const reservations = new Set([orderId]);
+  const findReservation = (id: WorkspaceReservationId) =>
+    Effect.sync(() => (reservations.has(id) ? [{ id }] : []));
+  const database: WorkspaceE2ELocalReservationDatabase = {
+    deleteReservation: (id) =>
+      Effect.sync(() => {
+        if (cleanupConverges) reservations.delete(id);
       }),
-    };
+    findReservation,
+    transaction: (use) =>
+      use({
+        findReservation,
+        insertReservation: ({ overrides }) =>
+          Effect.sync(() => {
+            reservations.add(
+              requireValue(overrides?.id, "fixture reservation id")
+            );
+          }),
+      }),
   };
 
-  type InsertedRow = { readonly id?: string };
-  // The fixture inserts reservations as a batch and reads them back.
-  const storeReservations = (inserted: InsertedRow | readonly InsertedRow[]) =>
-    Effect.sync(() => {
-      const batch = [inserted].flat();
-      for (const row of batch) {
-        if (!row.id) throw new Error("fixture reservation id missing");
-        lastInsertedId = row.id;
-        rows.set(row.id, row);
-      }
-      return batch;
-    });
-  const insert = (table: unknown) => ({
-    values: (inserted: InsertedRow | readonly InsertedRow[]) =>
-      // The fixture's synthetic reservation author isn't a reservation row.
-      table === customerAccounts
-        ? Effect.void
-        : { returning: () => storeReservations(inserted) },
-  });
-
-  const makeTransaction = () => ({ insert, select: makeSelect });
-
-  const db = {
-    delete: () => ({
-      where: () =>
-        Effect.sync(() => {
-          if (cleanupConverges && lastInsertedId) rows.delete(lastInsertedId);
-        }),
-    }),
-    insert,
-    select: makeSelect,
-    transaction: (
-      use: (transaction: ReturnType<typeof makeTransaction>) => unknown
-    ) => use(makeTransaction()),
+  const isolationDatabase: ReservationStatusIsolationDatabase<never> = {
+    readRow: (id) =>
+      Effect.sync(() =>
+        id === orderId && reservations.has(id)
+          ? {
+              dotypos_customer_id: customerId,
+              fulfillment_state: "failed",
+              payment_state: "paid",
+              reservation_id: orderId,
+            }
+          : undefined
+      ),
+    withLocalReservation: (use) =>
+      withWorkspaceE2ELocalReservationFixture(use, { database }),
   };
 
   return {
-    db: db as never,
-    hasOnlyTarget: () => rows.size === 1 && rows.has(orderId),
+    isolationDatabase,
+    hasOnlyTarget: () => reservations.size === 1 && reservations.has(orderId),
   };
 };
 
@@ -336,18 +315,20 @@ const runIsolation = async (
                   }
                 );
                 yield* step({
-                  execute: assertReservationStatusIsolation({
-                    config: caseConfig,
-                    customerId: customerId as never,
-                    data: { locale: "en-US" },
-                    openSeparateSession,
-                    openSession,
-                    orderId: orderId as never,
-                  }).pipe(
+                  execute: assertReservationStatusIsolation(
+                    {
+                      config: caseConfig,
+                      customerId,
+                      data: { locale: "en-US" },
+                      openSeparateSession,
+                      openSession,
+                      orderId,
+                    },
+                    database.isolationDatabase
+                  ).pipe(
                     Effect.tapError((failure) =>
                       Effect.sync(() => failures.push(failure))
-                    ),
-                    Effect.provideService(E2EDatabase, E2EDatabase.of(database))
+                    )
                   ),
                   id: stepId,
                   timeoutMs: isolationStepTimeoutMs,

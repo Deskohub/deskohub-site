@@ -4,6 +4,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import type { CheckoutData } from "../types";
 import {
   makeCoworkCheckoutData,
@@ -111,10 +112,10 @@ test.skipIf(!chromiumAvailable)(
       },
       {
         data: makeOfficeCheckoutData(origin, {
-          endsAt: "2099-09-02T22:00:00Z" as never,
+          endsAt: instantStringSchema.make("2099-09-02T22:00:00Z"),
           endsOn: "2099-09-02",
           seats: 2,
-          startsAt: "2099-08-31T22:00:00Z" as never,
+          startsAt: instantStringSchema.make("2099-08-31T22:00:00Z"),
           startsOn: "2099-09-01",
         }),
         html: `
@@ -197,7 +198,7 @@ test("needs the office range to describe an office repeat", () => {
   expect(() =>
     toRepeatReservation({
       ...openSpaceData,
-      expectedReservationDetails: { kind: "office" } as never,
+      expectedReservationDetails: { kind: "office" },
       office: undefined,
     })
   ).toThrow("Office repeat assertions require range data");

@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import {
   getMeetingRoomReservationDurationKey,
   isMeetingRoomWholeDayReservationDuration,
@@ -155,9 +156,13 @@ export const preparedReservationForm: ReservationFormPreparation = {
   kind: "prepared",
 };
 
+export const reservationPreparationStateSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literals(["pending", "ready"]) }),
+  Schema.Struct({ status: Schema.Literal("failed"), error: Schema.String }),
+]);
+
 export type ReservationPreparationState =
-  | { readonly status: "pending" | "ready" }
-  | { readonly error: string; readonly status: "failed" };
+  typeof reservationPreparationStateSchema.Type;
 
 /**
  * Runs `preparation` on the reservation form and returns the page URL.
@@ -423,17 +428,17 @@ export const prepareReservationForm = ({
           workstationSwitch.click();
         }
       }
+      const monitorUnavailable = `${desiredMonitorOption} monitor option was not available`;
       let monitorInput: HTMLInputElement | undefined;
       await waitUntil(
         () => {
           monitorInput = findMonitorInput();
-          return (
-            monitorInput instanceof HTMLInputElement && !monitorInput.disabled
-          );
+          return monitorInput !== undefined && !monitorInput.disabled;
         },
-        `${desiredMonitorOption} monitor option was not available`,
+        monitorUnavailable,
         waitTimeoutMs
       );
+      if (!monitorInput) throw new Error(monitorUnavailable);
       const price = document.querySelector(
         `[data-reservation-type-price="${desiredTier}"]`
       );
@@ -443,11 +448,10 @@ export const prepareReservationForm = ({
       // Advertised prices do not depend on the monitor option, and the page
       // renders both Reserved Desk variants already priced, so the selection
       // only has to land on a ready price.
-      const selectedMonitor = monitorInput as HTMLInputElement;
-      if (!selectedMonitor.checked) {
-        (selectedMonitor.closest("label") ?? selectedMonitor).click();
+      if (!monitorInput.checked) {
+        (monitorInput.closest("label") ?? monitorInput).click();
         await waitUntil(
-          () => selectedMonitor.checked,
+          () => monitorInput?.checked === true,
           `${desiredMonitorOption} monitor option was not selected`,
           waitTimeoutMs
         );
@@ -511,25 +515,28 @@ export const prepareReservationForm = ({
     if (!duration.checked) (duration.closest("label") ?? duration).click();
     if (!expected.wholeDay && expected.startTimeEntry === "listed") {
       const listedStartSelector = `[role="radiogroup"] input[type="radio"][value="${expected.date}T${expected.time}"]`;
+      const unavailableStart = () =>
+        `meeting-room start ${expected.time} is not among the listed free start times: ${[
+          ...document.querySelectorAll(
+            '[role="radiogroup"] input[type="radio"]'
+          ),
+        ]
+          .filter((option) => option instanceof HTMLInputElement)
+          .map((option) => option.value)
+          .filter((value) => value.includes("T"))
+          .map((value) => value.slice(11))
+          .join(",")}`;
       await waitUntil(
         () =>
           document.querySelector(listedStartSelector) instanceof
           HTMLInputElement,
-        () =>
-          `meeting-room start ${expected.time} is not among the listed free start times: ${[
-            ...document.querySelectorAll<HTMLInputElement>(
-              '[role="radiogroup"] input[type="radio"]'
-            ),
-          ]
-            .map((option) => option.value)
-            .filter((value) => value.includes("T"))
-            .map((value) => value.slice(11))
-            .join(",")}`,
+        unavailableStart,
         waitTimeoutMs
       );
-      const listedStart = document.querySelector(
-        listedStartSelector
-      ) as HTMLInputElement;
+      const listedStart = document.querySelector(listedStartSelector);
+      if (!(listedStart instanceof HTMLInputElement)) {
+        throw new Error(unavailableStart());
+      }
       (listedStart.closest("label") ?? listedStart).click();
     } else if (!expected.wholeDay) {
       setField('input[aria-label^="Meeting room start time"]', expected.time);
@@ -811,22 +818,23 @@ export const prepareReservationForm = ({
       }
       throw new Error(label);
     };
-    let button: HTMLButtonElement | undefined;
+    const missingAction = "reservation continue or submit button not found";
+    let action: HTMLButtonElement | undefined;
     await waitForAction(() => {
       const candidate = document.querySelector(actionSelector);
       if (candidate instanceof HTMLButtonElement) {
-        button = candidate;
+        action = candidate;
         return true;
       }
       return false;
-    }, "reservation continue or submit button not found");
-    const action = button as HTMLButtonElement;
+    }, missingAction);
+    if (!action) throw new Error(missingAction);
     const form = action.closest("form") ?? document.querySelector("form");
     if (!(form instanceof HTMLFormElement)) {
       throw new Error("reservation form not found");
     }
     await waitForAction(
-      () => !action.disabled,
+      () => action?.disabled === false,
       `reservation ${action.id} button stayed disabled`
     );
     return location.href;
