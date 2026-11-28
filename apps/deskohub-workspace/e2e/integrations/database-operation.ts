@@ -55,9 +55,6 @@ const isTransientDatabaseConnectionFailure = (
 
   return (
     "cause" in cause &&
-    isTransientDatabaseConnectionFailure(
-      (cause as { readonly cause?: unknown }).cause,
-      visited
-    )
+    isTransientDatabaseConnectionFailure(cause.cause, visited)
   );
 };

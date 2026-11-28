@@ -13,10 +13,17 @@ const deploymentOrigin =
 
 const recordingFetch = (respond: () => Promise<Response>) => {
   const requests: { readonly headers: Headers; readonly url: string }[] = [];
-  const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    requests.push({ headers: new Headers(init?.headers), url: String(url) });
-    return respond();
-  }) as typeof globalThis.fetch;
+  const fetch: typeof globalThis.fetch = Object.assign(
+    (url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      requests.push({ headers: new Headers(init?.headers), url: String(url) });
+      return respond();
+    },
+    {
+      preconnect: () => {
+        throw new Error("Unexpected automation planner preconnect");
+      },
+    }
+  );
   return { fetch, requests };
 };
 

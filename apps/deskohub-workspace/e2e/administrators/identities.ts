@@ -170,7 +170,7 @@ export const makeWorkspaceE2EAdministrationIdentities = <Label extends string>({
       account: Pick<WorkspaceE2EAdministrationAccount, "accountId">,
       browser: {
         readonly origin: string;
-        readonly session: E2EBrowserSession;
+        readonly session: Pick<E2EBrowserSession, "addCookies">;
       }
     ) =>
       signInWorkspaceE2ESyntheticBrowserSession({

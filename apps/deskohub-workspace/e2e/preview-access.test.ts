@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, type BrowserContext, chromium } from "@playwright/test";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import { primePreviewAccess } from "./preview-access";
+import { type PreviewAccessFetch, primePreviewAccess } from "./preview-access";
 
 const syntheticSecret = "synthetic-bypass-sentinel-3f9c2a";
 const syntheticJwt = "synthetic-vercel-jwt-7d41";
@@ -39,10 +39,10 @@ const bypassRedirect = () =>
 
 const recordingFetch = (respond: () => Promise<Response>) => {
   const requests: Array<{ init: RequestInit | undefined; url: string }> = [];
-  const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+  const fetch: PreviewAccessFetch = (url, init) => {
     requests.push({ init, url: String(url) });
     return respond();
-  }) as typeof globalThis.fetch;
+  };
   return { fetch, requests };
 };
 
@@ -122,8 +122,8 @@ test("keeps the secret out of a failed bypass request's error", async () => {
     { fetch }
   ).catch((cause: unknown) => cause);
 
-  expect(error).toBeInstanceOf(Error);
-  expect((error as Error).cause).toBeUndefined();
+  if (!(error instanceof Error)) throw new Error("Expected a failed probe.");
+  expect(error.cause).toBeUndefined();
   expect(Bun.inspect(error)).not.toContain(syntheticSecret);
   expect(added).toEqual([]);
 });
@@ -145,7 +145,8 @@ test("reports a rejected bypass by status alone", async () => {
     { fetch }
   ).catch((cause: unknown) => cause);
 
-  expect((error as Error).message).toBe(
+  if (!(error instanceof Error)) throw new Error("Expected a rejected probe.");
+  expect(error.message).toBe(
     "The Vercel protection bypass probe failed with 401"
   );
   expect(Bun.inspect(error)).not.toContain(syntheticSecret);
@@ -171,6 +172,7 @@ test.skipIf(!chromiumAvailable)(
   "keeps the secret out of a traced browser context",
   async () => {
     if (!(browser && tracesDir)) throw new Error("Chromium is not launched.");
+    const traceDirectory = tracesDir;
     const context = await browser.newContext();
     await context.tracing.start({ name: "preview-access", snapshots: true });
     await primePreviewAccess(context, deploymentOrigin, syntheticSecret, {
@@ -182,7 +184,7 @@ test.skipIf(!chromiumAvailable)(
     }).catch(() => undefined);
     const cookies = await context.cookies(deploymentOrigin);
     await context.tracing.stop({
-      path: join(tracesDir, "preview-access.zip"),
+      path: join(traceDirectory, "preview-access.zip"),
     });
     await context.close();
 
@@ -190,9 +192,9 @@ test.skipIf(!chromiumAvailable)(
     // The raw trace files stay beside the archive. The cookie the trace
     // recorded shows the scan reads what Playwright captured.
     const traced = await Promise.all(
-      (await readdir(tracesDir))
+      (await readdir(traceDirectory))
         .filter((name) => /\.(?:network|trace)$/.test(name))
-        .map((name) => readFile(join(tracesDir as string, name), "utf8"))
+        .map((name) => readFile(join(traceDirectory, name), "utf8"))
     );
     expect(traced.join("\n")).toContain(syntheticJwt);
     expect(traced.join("\n")).not.toContain(syntheticSecret);

@@ -18,7 +18,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -286,17 +286,19 @@ export const replayPaymentWebhook = (
     log(`${providerName} webhook replay accepted`);
   });
 
+const decodeNexiWebhookDiagnostic = Schema.decodeUnknownEffect(
+  Schema.Struct({ code: Schema.String })
+);
+
 const readNexiWebhookDiagnosticCode = (
   response: HttpClientResponse.HttpClientResponse
 ) =>
   response.json.pipe(
-    Effect.map((body) => {
-      if (!body || typeof body !== "object" || !("code" in body)) {
-        return undefined;
-      }
-      return isNexiWebhookDiagnosticCode(body.code) ? body.code : undefined;
-    }),
-    Effect.catch(() => Effect.succeed(undefined))
+    Effect.flatMap(decodeNexiWebhookDiagnostic),
+    Effect.map(({ code }) =>
+      isNexiWebhookDiagnosticCode(code) ? code : undefined
+    ),
+    Effect.orElseSucceed(() => undefined)
   );
 
 const previewWebhookHeaders = (config: WorkspaceE2EConfig) => ({
@@ -630,19 +632,18 @@ export const validateVoucherRedemptions = (
 
     yield* tryWorkspaceE2ESync("assert voucher redemption history", () => {
       assert(expected.length > 0, "expected at least one voucher checkout");
-      const currentRows = expected.map(({ orderId }) => {
-        const matching = rows.filter(
-          ({ reservationId }) => reservationId === orderId
+      const currentRows = expected.map((expectation) => {
+        const [row, ...duplicates] = rows.filter(
+          ({ reservationId }) => reservationId === expectation.orderId
         );
         assert(
-          matching.length === 1,
+          row && duplicates.length === 0,
           "expected one voucher claim per checkout"
         );
-        return matching[0]!;
+        return { row, expectation };
       });
 
-      currentRows.forEach((row, index) => {
-        const expectation = expected[index]!;
+      currentRows.forEach(({ row, expectation }) => {
         assert(row.claimState === "redeemed", "voucher claim was not redeemed");
         assert(row.redeemedAt, "voucher redemption timestamp missing");
         assert(
@@ -669,8 +670,10 @@ export const validateVoucherRedemptions = (
         );
       });
       assert(
-        currentRows.reduce((sum, row) => sum + row.appliedAmountValue, 0) ===
-          creditPerRun.value,
+        currentRows.reduce(
+          (sum, { row }) => sum + row.appliedAmountValue,
+          0
+        ) === creditPerRun.value,
         "current checkouts did not consume the seeded voucher credit"
       );
 
@@ -1012,8 +1015,8 @@ export const markPaymentTerminalForE2E = (
 
     yield* runDatabaseOperation(
       "mark payment attempt terminal state",
-      db.transaction((tx) =>
-        Effect.gen(function* () {
+      db.transaction(
+        Effect.fnUntraced(function* (tx) {
           yield* tx
             .update(paymentAttempts)
             .set({
@@ -1084,8 +1087,8 @@ export const releaseReservationForLatePaymentRecoveryE2E = (
 
     const result = yield* runDatabaseOperation(
       "release reservation for late payment recovery",
-      db.transaction((tx) =>
-        Effect.gen(function* () {
+      db.transaction(
+        Effect.fnUntraced(function* (tx) {
           const [attempt] = yield* tx
             .update(paymentAttempts)
             .set({

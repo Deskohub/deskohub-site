@@ -1,7 +1,8 @@
 import {
   type DotyposCustomer,
-  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   type DotyposReservationId,
+  DotyposReservationIdSchema,
   DotyposService,
 } from "@deskohub/dotypos";
 import { eq, inArray } from "drizzle-orm";
@@ -17,7 +18,7 @@ import { readSyntheticCustomerProfile } from "../account/fixtures";
 import type { WorkspaceE2EAccountJournal } from "../account/journal";
 import type { WorkspaceE2EAccountJournalEvidence } from "../account/reconcile";
 import type { DatasourceConfig } from "../config";
-import { toWorkspaceE2EError } from "../errors";
+import { toWorkspaceE2EError, workspaceE2EError } from "../errors";
 import { E2EDatabase } from "../integrations/database.service";
 import { runDatabaseOperation } from "../integrations/database-operation";
 import { getDotyposLayer, parseDotyposInstant } from "../integrations/dotypos";
@@ -26,6 +27,14 @@ import type { AgentEvalReservationRecord } from "./judges";
 const decodeStoredDetails = Schema.decodeUnknownOption(
   storedWorkspaceReservationDetailsSchema
 );
+
+// A journal ID must keep the exact value written by the run.
+const journalCustomerIdSchema = Schema.toType(DotyposCustomerIdSchema);
+const journalReservationIdSchema = Schema.toType(DotyposReservationIdSchema);
+const invalidJournalIds = () =>
+  workspaceE2EError("Invalid Dotypos resource ID in agent eval journal", {
+    operation: "read agent eval journal IDs",
+  });
 
 const toProduct = (
   details: StoredWorkspaceReservationDetails
@@ -147,10 +156,7 @@ export const readAgentEvalRunResources = Effect.fn("readAgentEvalRunResources")(
     const createdContactIds = yield* Effect.forEach(
       contactIds,
       (customerId) =>
-        readSyntheticCustomerProfile(
-          datasourceConfig,
-          customerId as DotyposCustomerId
-        ).pipe(
+        readSyntheticCustomerProfile(datasourceConfig, customerId).pipe(
           Effect.map((customer) =>
             Option.isSome(customer) &&
             isCreatedDuringAgentEvalRun(customer.value, runStartedAt)
@@ -187,33 +193,40 @@ const settledReservationIds = (
   datasourceConfig: DatasourceConfig,
   reservationIds: readonly string[]
 ) =>
-  Effect.forEach(reservationIds, (reservationId) =>
-    readProviderReservation(datasourceConfig, reservationId).pipe(
-      Effect.map((reservation) =>
-        Option.isSome(reservation) && reservation.value.status === "CANCELLED"
-          ? [reservationId]
-          : []
-      )
-    )
+  Effect.forEach(
+    reservationIds,
+    Effect.fnUntraced(function* (reservationId) {
+      const id = yield* Schema.decodeUnknownEffect(journalReservationIdSchema)(
+        reservationId
+      ).pipe(Effect.mapError(invalidJournalIds));
+      const reservation = yield* readProviderReservation(datasourceConfig, id);
+      return Option.isSome(reservation) &&
+        reservation.value.status === "CANCELLED"
+        ? [reservationId]
+        : [];
+    })
   ).pipe(Effect.map((ids) => new Set(ids.flat())));
 
 const settledCustomerIds = (
   datasourceConfig: DatasourceConfig,
   customerIds: readonly string[]
 ) =>
-  Effect.forEach(customerIds, (customerId) =>
-    readSyntheticCustomerProfile(
-      datasourceConfig,
-      customerId as DotyposCustomerId
-    ).pipe(
-      Effect.map((customer) =>
-        Option.isSome(customer) &&
+  Effect.forEach(
+    customerIds,
+    Effect.fnUntraced(function* (customerId) {
+      const id = yield* Schema.decodeUnknownEffect(journalCustomerIdSchema)(
+        customerId
+      ).pipe(Effect.mapError(invalidJournalIds));
+      const customer = yield* readSyntheticCustomerProfile(
+        datasourceConfig,
+        id
+      );
+      return Option.isSome(customer) &&
         customer.value.expireDate != null &&
         Date.parse(customer.value.expireDate) <= Date.now()
-          ? [customerId]
-          : []
-      )
-    )
+        ? [customerId]
+        : [];
+    })
   ).pipe(Effect.map((ids) => new Set(ids.flat())));
 
 /**
@@ -269,6 +282,9 @@ export const readAgentEvalPaymentLedgerReservationIds = Effect.fn(
   "readAgentEvalPaymentLedgerReservationIds"
 )(function* (dotyposReservationIds: readonly string[]) {
   if (dotyposReservationIds.length === 0) return [];
+  const reservationIds = yield* Schema.decodeUnknownEffect(
+    Schema.Array(journalReservationIdSchema)
+  )(dotyposReservationIds).pipe(Effect.mapError(invalidJournalIds));
   const { db } = yield* E2EDatabase;
   const rows = yield* runDatabaseOperation(
     "read agent eval payment ledger reservation ids",
@@ -282,23 +298,21 @@ export const readAgentEvalPaymentLedgerReservationIds = Effect.fn(
         eq(paymentAttempts.workspaceReservationId, workspaceReservations.id)
       )
       .where(
-        inArray(
-          workspaceReservations.dotyposReservationId,
-          dotyposReservationIds as DotyposReservationId[]
-        )
+        inArray(workspaceReservations.dotyposReservationId, reservationIds)
       )
   );
-  return rows.flatMap((row) =>
-    row.dotyposReservationId ? [row.dotyposReservationId as string] : []
+  return rows.flatMap<string>((row) =>
+    row.dotyposReservationId ? [row.dotyposReservationId] : []
   );
 });
 
 const readProviderReservation = Effect.fn("readProviderReservation")(
-  function* (_datasourceConfig: DatasourceConfig, reservationId: string) {
+  function* (
+    _datasourceConfig: DatasourceConfig,
+    reservationId: DotyposReservationId
+  ) {
     const dotypos = yield* DotyposService;
-    const details = yield* dotypos.getReservation(
-      reservationId as DotyposReservationId
-    );
+    const details = yield* dotypos.getReservation(reservationId);
     return Option.map(details, ({ reservation }) => reservation);
   },
   (effect, datasourceConfig) =>

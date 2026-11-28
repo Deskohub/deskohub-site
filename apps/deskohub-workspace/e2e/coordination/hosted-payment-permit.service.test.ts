@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Deferred, Effect, Exit, Fiber } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import {
   prepareWorkspaceE2EHostedPaymentPermitQueue,
   type WorkspaceE2EHostedPaymentPermitOptions,
@@ -45,11 +45,16 @@ const runWithPermit = <A, E>(
   options: Partial<WorkspaceE2EHostedPaymentPermitOptions> = {}
 ) => Effect.runPromise(effect.pipe(Effect.provide(permitLayer(options))));
 
-type HolderEvent = {
-  readonly at: number;
-  readonly event: "end" | "start";
-  readonly label: string;
-};
+const holderEventSchema = Schema.Struct({
+  at: Schema.Finite,
+  event: Schema.Literals(["end", "start"]),
+  label: Schema.String,
+});
+type HolderEvent = typeof holderEventSchema.Type;
+
+const decodeHolderEvent = Schema.decodeSync(
+  Schema.fromJsonString(holderEventSchema)
+);
 
 const spawnHolder = (input: {
   readonly capacity: number;
@@ -75,7 +80,7 @@ const readHolderEvents = async (): Promise<HolderEvent[]> =>
   (await readFile(join(directory, "holders.jsonl"), "utf8").catch(() => ""))
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as HolderEvent);
+    .map((line) => decodeHolderEvent(line));
 
 const peakHolders = (events: readonly HolderEvent[]) => {
   let active = 0;
@@ -490,6 +495,23 @@ test.skipIf(!procfsAvailable)(
     expect(Exit.isFailure(exit)).toBe(true);
   }
 );
+
+test("fails admission when an earlier ticket owner is malformed", async () => {
+  await writeFile(
+    ticketFile(0),
+    JSON.stringify({ pid: process.pid, token: 42 })
+  );
+
+  const failure = await runWithPermit(
+    Effect.gen(function* () {
+      const permit = yield* WorkspaceE2EHostedPaymentPermitService;
+      return yield* permit.withPermit("next", Effect.void).pipe(Effect.flip);
+    }),
+    { capacity: 1 }
+  );
+
+  expect(failure.message).toBe("Invalid hosted payment permit ticket owner");
+});
 
 test("fails the session when its release cannot be recorded", async () => {
   const exit = await runWithPermit(

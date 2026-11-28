@@ -48,7 +48,7 @@ import {
   readAgentEvalReservations,
   readAgentEvalRunResources,
 } from "./records";
-import { redactAgentEvalOutput, redactAgentEvalValue } from "./redaction";
+import { redactAgentEvalOutput } from "./redaction";
 import type { AgentEvalRunResult } from "./results";
 import {
   type AgentEvalJudgeInput,
@@ -419,10 +419,7 @@ export const runAgentEvalCase = async ({
       wallTimeMs,
     };
     await writeAgentEvalRunResult(result);
-    await writeAgentEvalJudgeInput(
-      result,
-      redactAgentEvalValue(judgeInput, identifiers)
-    );
+    await writeAgentEvalJudgeInput(result, judgeInput, identifiers);
     return result;
   } finally {
     try {

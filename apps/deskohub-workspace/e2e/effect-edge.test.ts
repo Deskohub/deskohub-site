@@ -138,8 +138,10 @@ describe("E2E Effect edge", () => {
     withNull.abort(null);
     const rejection = await withNullRun.catch((cause: unknown) => cause);
 
-    expect(rejection).toBeInstanceOf(DOMException);
-    expect((rejection as DOMException).name).toBe("AbortError");
+    if (!(rejection instanceof DOMException)) {
+      throw new Error("Expected a DOMException", { cause: rejection });
+    }
+    expect(rejection.name).toBe("AbortError");
   });
 
   test("rejects as soon as its signal aborts, leaving finalizers in the background", async () => {

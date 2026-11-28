@@ -234,7 +234,9 @@ export const makeWorkspaceE2EEnvironment = (
   runtimeEnvironment: RuntimeEnvironment = process.env
 ): WorkspaceE2EEnvironment => {
   const environment = makeE2EEnvironment(runtimeEnvironment);
-  if (!environment.WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL) {
+  const permitDatabaseUrl =
+    environment.WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL;
+  if (!permitDatabaseUrl) {
     throw new Error("Invalid workspace E2E environment variables.");
   }
   if (
@@ -250,7 +252,10 @@ export const makeWorkspaceE2EEnvironment = (
       "Unlimited auto-renewal requires the leased exact-SHA payments flow in manual Nexi mode."
     );
   }
-  return environment as WorkspaceE2EEnvironment;
+  return {
+    ...environment,
+    WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL: permitDatabaseUrl,
+  };
 };
 
 /**

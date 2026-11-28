@@ -740,9 +740,9 @@ const startAccountLegalFixture = async ({
   );
   const serverUrl = `http://localhost:${port}`;
   const readyUrl = `${serverUrl}${accountFixtureReadyPath}`;
-  const processExit = {
+  const processExit: { complete: boolean; code: number | undefined } = {
     complete: false,
-    code: undefined as number | undefined,
+    code: undefined,
   };
   const contexts = new Set<BrowserContext>();
   let server: ReturnType<typeof Bun.spawn> | undefined;

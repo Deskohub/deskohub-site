@@ -1,14 +1,18 @@
 import { AssertionError } from "node:assert";
-import type { Browser, BrowserContext, Page, Request } from "@playwright/test";
+import type { BrowserContext, Page, Request } from "@playwright/test";
 import { Effect } from "effect";
-import { E2EBrowserSession } from "./browser-session";
+import {
+  type BrowserContextOpener,
+  type BrowserPageFunction,
+  E2EBrowserSession,
+} from "./browser-session";
 import {
   isWorkspaceE2ETimeout,
   WorkspaceE2EError,
   workspaceE2EError,
 } from "./errors";
 import { withinWorkspaceE2EDeadline } from "./polling";
-import { primePreviewAccess } from "./preview-access";
+import { type PreviewAccessFetch, primePreviewAccess } from "./preview-access";
 import { redact } from "./redaction";
 
 /**
@@ -60,10 +64,10 @@ const withinAdminDeadline = <A>(
 export const openAdminSession = Effect.fn("openAdminSession")(
   function* (input: {
     readonly baseURL: string | undefined;
-    readonly browser: Browser;
+    readonly browser: BrowserContextOpener;
     readonly caseName: string;
     /** The session's preview access `fetch`; tests point it at a local server. */
-    readonly fetch?: typeof fetch;
+    readonly fetch?: PreviewAccessFetch;
   }) {
     const { baseURL } = input;
     if (!baseURL) {
@@ -107,19 +111,14 @@ export const openAdminSession = Effect.fn("openAdminSession")(
       );
     const adminSession: E2EBrowserSession = {
       ...session,
+      addCookies: (label, cookies) =>
+        use(label, (page) => page.context().addCookies(cookies), undefined),
       evaluate: <A, Arg>(
         label: string,
-        fn: (arg: Arg) => A | Promise<A>,
+        fn: BrowserPageFunction<Arg, A>,
         arg: Arg,
         deadline?: { readonly timeoutMs?: number }
-      ) =>
-        use(
-          label,
-          // Playwright types the argument as its serialized form; plain data
-          // is the same shape.
-          (page) => page.evaluate(fn as (arg: unknown) => A | Promise<A>, arg),
-          deadline?.timeoutMs
-        ),
+      ) => use(label, (page) => page.evaluate(fn, arg), deadline?.timeoutMs),
       primePreviewAccess: (url, bypassSecret, options) =>
         session
           .primePreviewAccess(url, bypassSecret, options)
@@ -145,7 +144,7 @@ export const primePreviewBypass = (input: {
   readonly bypassSecret: string | undefined;
   readonly context: BrowserContext;
   /** Tests point the probe at a local server. */
-  readonly fetch?: typeof fetch;
+  readonly fetch?: PreviewAccessFetch;
   readonly origin: string;
   readonly timeoutMs?: number;
 }) =>

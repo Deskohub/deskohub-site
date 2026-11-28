@@ -1,6 +1,6 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { createServer } from "node:http";
-import { chromium, errors, type Locator, type Page } from "@playwright/test";
+import { chromium, errors } from "@playwright/test";
 import { createElement, Suspense, use } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { playwrightChromiumAvailable } from "../shared/testing/playwright-browser";
@@ -97,14 +97,15 @@ test.skipIf(!chromiumAvailable)(
         const fallbackObservation = new Promise<void>((resolve) => {
           fallbackObserved = resolve;
         });
-        const observedPage: Pick<Page, "waitForFunction"> = {
-          waitForFunction: (...args: Parameters<Page["waitForFunction"]>) => {
-            fallbackObserved();
-            return page.waitForFunction(...args);
+        const handlerReady = waitForReactClickHandler(
+          {
+            waitForFunction: (read, arg, options) => {
+              fallbackObserved();
+              return page.waitForFunction(read, arg, options);
+            },
           },
-        } as Pick<Page, "waitForFunction">;
-
-        const handlerReady = waitForReactClickHandler(observedPage, control);
+          control
+        );
         // The wait observes the server-rendered fallback first; React's
         // streamed reveal then removes that node and moves the content in.
         await fallbackObservation;
@@ -217,10 +218,10 @@ test("rejects within its deadline when a detached control is never replaced", as
   const lookupTimeouts: (number | undefined)[] = [];
   const handle = {
     dispose: async () => {},
-    jsonValue: async () => "detached",
+    jsonValue: async (): Promise<"detached"> => "detached",
   };
 
-  const control = Object.assign({} as Pick<Locator, "elementHandle">, {
+  const control = {
     elementHandle: async (options?: { readonly timeout?: number }) => {
       lookupTimeouts.push(options?.timeout);
       if (lookupTimeouts.length === 1) return handle;
@@ -231,13 +232,13 @@ test("rejects within its deadline when a detached control is never replaced", as
       advance(options.timeout);
       throw new errors.TimeoutError("fake replacement never attached");
     },
-  });
-  const page = Object.assign({} as Pick<Page, "waitForFunction">, {
+  };
+  const page = {
     waitForFunction: async () => {
       advance(4_000);
       return handle;
     },
-  });
+  };
 
   const failure = await waitForReactClickHandler(page, control).then(
     () => undefined,

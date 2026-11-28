@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type AgentEvalRunResult,
   formatAgentEvalSummaryMarkdown,
+  parseAgentEvalRunResult,
   summarizeAgentEvalResults,
 } from "./results";
 
@@ -42,6 +43,23 @@ const target = {
   sha: "a".repeat(40),
   verifiedAt: "2026-10-18T12:00:00.000Z",
 };
+
+describe("parseAgentEvalRunResult", () => {
+  test("reads the saved result with nullable and nested fields", () => {
+    const result = run({
+      paymentPage: { actedIn: true, inNewTab: false, openedAfterMs: 800 },
+      routes: ["pay", "payment-provider"],
+    });
+    expect(parseAgentEvalRunResult(JSON.stringify(result))).toEqual(result);
+  });
+
+  test("rejects an invalid saved route without exposing its value", () => {
+    const serialized = JSON.stringify({ ...run({}), routes: ["invalid"] });
+    expect(() => parseAgentEvalRunResult(serialized)).toThrow(
+      "The agent eval run result is invalid"
+    );
+  });
+});
 
 describe("summarizeAgentEvalResults", () => {
   const results = [

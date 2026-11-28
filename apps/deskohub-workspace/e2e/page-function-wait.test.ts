@@ -51,8 +51,9 @@ test("gives up at its deadline", async () => {
     (cause: unknown) => cause
   );
 
-  expect(failure).toBeInstanceOf(errors.TimeoutError);
-  expect((failure as Error).message).toContain("re-issued 3 times");
+  if (!(failure instanceof errors.TimeoutError))
+    throw new Error("Expected a Playwright timeout.", { cause: failure });
+  expect(failure.message).toContain("re-issued 3 times");
   expect(sliceTimeouts).toEqual([wakeMs, wakeMs, wakeMs / 2]);
   expect(elapsedMs()).toBe(deadline - startedAt);
 });

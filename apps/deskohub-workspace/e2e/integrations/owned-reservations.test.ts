@@ -129,11 +129,10 @@ const fixture = async (
         return Response.json({ currentPage: String(page), data, nextPage });
       }
       if (url.pathname === "/clouds/cloud/customers") {
-        expect(url.searchParams.get("filter")).toContain("deleted|in|0,1");
-        const ids = (url.searchParams.get("filter") ?? "")
-          .split(";")[0]!
-          .slice("id|in|".length)
-          .split(",");
+        const filter = url.searchParams.get("filter");
+        expect(filter).toContain("deleted|in|0,1");
+        const [idFilter = ""] = (filter ?? "").split(";");
+        const ids = idFilter.slice("id|in|".length).split(",");
         const page = Number(url.searchParams.get("page"));
         const selected = customers.filter(({ id }) => ids.includes(id));
         return Response.json({

@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Frame, Locator, Page, Request } from "@playwright/test";
 import { Effect } from "effect";
 import type {
+  BrowserPageFunction,
   E2EBrowserSession,
   OpenE2EBrowserSession,
 } from "./browser-session";
@@ -267,15 +268,13 @@ export const waitForReactHandler = (
 export const waitForPageCondition = <Arg>(
   session: E2EBrowserSession,
   description: string,
-  condition: (arg: Arg) => unknown,
+  condition: BrowserPageFunction<Arg, unknown>,
   arg: Arg,
   { timeoutMs = 60_000 }: { readonly timeoutMs?: number } = {}
 ): Effect.Effect<void, WorkspaceE2EError> =>
   session
     .use(`wait for ${description}`, (page) =>
-      // Playwright types the argument as its serialized form; plain data is
-      // the same shape.
-      page.waitForFunction(condition as (arg: unknown) => unknown, arg, {
+      page.waitForFunction(condition, arg, {
         timeout: timeoutMs,
       })
     )
@@ -323,7 +322,7 @@ export const activateHydratedElement = (
 export const assertPageCheck = <Arg>(
   session: E2EBrowserSession,
   label: string,
-  check: (arg: Arg) => string | null,
+  check: BrowserPageFunction<Arg, string | null>,
   arg: Arg,
   { timeoutMs }: { readonly timeoutMs: number }
 ): Effect.Effect<void, WorkspaceE2EError> =>

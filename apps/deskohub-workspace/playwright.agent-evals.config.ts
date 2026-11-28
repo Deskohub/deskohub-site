@@ -1,8 +1,10 @@
 import "./shared/testing/workspace-test-environment";
 
 import { defineConfig } from "@playwright/test";
-import { agentEvalMinimumRunsPerCell } from "./e2e/agent-evals/results";
-import { agentEvalOutputDirectory } from "./e2e/agent-evals/run-set";
+import {
+  agentEvalMinimumRunsPerCell,
+  agentEvalOutputDirectory,
+} from "./e2e/agent-evals/run-settings";
 import { workspaceE2EPlaywrightDefaults } from "./e2e/playwright-defaults";
 import {
   workspaceAgentEvalPlaywrightTimeout,

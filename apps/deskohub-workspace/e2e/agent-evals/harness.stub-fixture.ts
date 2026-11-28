@@ -1,19 +1,15 @@
-export {};
+import { text } from "node:stream/consumers";
+import { Schema } from "effect";
 
 // A harness without an LLM for the harness process tests. It reads the
 // request from stdin and ends the way its first argument names.
 const mode = process.argv[2];
 
-const readStdin = async () => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const request = JSON.parse(await readStdin()) as {
-  readonly locale: string;
-  readonly taskId: string;
-};
+const request = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ locale: Schema.String, taskId: Schema.String })
+  )
+)(await text(process.stdin));
 process.stderr.write(`stub harness received ${request.taskId}\n`);
 
 switch (mode) {

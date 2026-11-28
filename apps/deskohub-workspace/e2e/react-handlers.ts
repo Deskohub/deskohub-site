@@ -1,10 +1,29 @@
-import { errors, type Locator, type Page } from "@playwright/test";
+import {
+  errors,
+  type JSHandle,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { waitForPageFunction } from "./page-function-wait";
 import { workspaceE2EPollIntervalMs } from "./timeouts";
 
 const reactClickHandlerTimeoutMs = 15_000;
 
 type ReactClickHandlerState = "ready" | "detached" | false;
+
+type ReactClickControl<Handle> = {
+  readonly elementHandle: (options: {
+    readonly timeout: number;
+  }) => Promise<Handle | null>;
+};
+
+type ReactClickPage<Handle> = {
+  readonly waitForFunction: (
+    readState: typeof reactClickHandlerState,
+    element: Handle,
+    options: Parameters<Page["waitForFunction"]>[2]
+  ) => Promise<Pick<JSHandle<ReactClickHandlerState>, "dispose" | "jsonValue">>;
+};
 
 /**
  * Runs in the browser: whether React has attached an `onClick` prop to the
@@ -23,14 +42,13 @@ const reactClickHandlerState = (
   );
   if (reactPropsKey === undefined) return false;
 
-  const reactProps = Object.getOwnPropertyDescriptor(
+  const reactProps: unknown = Object.getOwnPropertyDescriptor(
     element,
     reactPropsKey
   )?.value;
   if (typeof reactProps !== "object" || reactProps === null) return false;
 
-  return "onClick" in reactProps &&
-    typeof (reactProps as { readonly onClick?: unknown }).onClick === "function"
+  return "onClick" in reactProps && typeof reactProps.onClick === "function"
     ? "ready"
     : false;
 };
@@ -40,9 +58,11 @@ const reactClickHandlerState = (
  * currently resolves to, resolving the locator again whenever the observed
  * node is replaced.
  */
-export const waitForReactClickHandler = async (
-  page: Pick<Page, "waitForFunction">,
-  control: Pick<Locator, "elementHandle">
+export const waitForReactClickHandler = async <
+  Handle extends Pick<JSHandle, "dispose">,
+>(
+  page: ReactClickPage<NoInfer<Handle>>,
+  control: ReactClickControl<Handle>
 ): Promise<void> => {
   const deadline = Date.now() + reactClickHandlerTimeoutMs;
   let replacements = 0;
@@ -104,15 +124,15 @@ export const waitForReactSubmitHandler = async (
             const reactPropsKey = Object.keys(node).find((key) =>
               key.startsWith("__reactProps$")
             );
-            const reactProps =
+            const reactProps: unknown =
               reactPropsKey === undefined
                 ? undefined
                 : Object.getOwnPropertyDescriptor(node, reactPropsKey)?.value;
             return (
               typeof reactProps === "object" &&
               reactProps !== null &&
-              typeof (reactProps as { readonly onSubmit?: unknown })
-                .onSubmit === "function"
+              "onSubmit" in reactProps &&
+              typeof reactProps.onSubmit === "function"
             );
           },
           element,

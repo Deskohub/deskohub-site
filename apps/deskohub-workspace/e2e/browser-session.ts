@@ -30,9 +30,17 @@ import {
   workspaceE2ETimeoutError,
 } from "./errors";
 import { withinWorkspaceE2EDeadline } from "./polling";
-import { primePreviewAccess } from "./preview-access";
+import { type PreviewAccessFetch, primePreviewAccess } from "./preview-access";
 import { redact } from "./redaction";
 import { workspaceE2ETimeouts } from "./timeouts";
+
+export type BrowserContextOpener = Pick<Browser, "newContext">;
+
+declare const pageEvaluate: Page["evaluate"];
+export type BrowserPageFunction<Arg, A> = Exclude<
+  Parameters<typeof pageEvaluate<A, Arg>>[0],
+  string
+>;
 
 /** What the session captured from every page of its context, redacted. */
 type E2EBrowserDiagnostics = {
@@ -100,6 +108,10 @@ type E2EBrowserDeadline = {
  */
 export type E2EBrowserSession = {
   readonly activate: (page: Page) => Effect.Effect<void, WorkspaceE2EError>;
+  readonly addCookies: (
+    label: string,
+    cookies: Parameters<BrowserContext["addCookies"]>[0]
+  ) => Effect.Effect<void, WorkspaceE2EError>;
   /**
    * Saves what the browser saw into `directory` for failure triage, then
    * closes the session: `network-requests.txt`, `console.txt` and
@@ -145,7 +157,7 @@ export type E2EBrowserSession = {
    */
   readonly evaluate: <A, Arg>(
     label: string,
-    fn: (arg: Arg) => A | Promise<A>,
+    fn: BrowserPageFunction<Arg, A>,
     arg: Arg,
     options?: E2EBrowserDeadline
   ) => Effect.Effect<A, WorkspaceE2EError>;
@@ -197,12 +209,12 @@ const snapshotTimeoutMs = 60_000;
 const open = Effect.fn("E2EBrowserSession.open")(function* (options: {
   /** Resolves relative `page.goto` URLs, as Playwright's `baseURL` does. */
   readonly baseURL?: string;
-  readonly browser: Browser;
+  readonly browser: BrowserContextOpener;
   /**
    * Exchanges the preview bypass secret; the global `fetch` by default.
    * Tests point a Workspace deployment origin at a local server with it.
    */
-  readonly fetch?: typeof fetch;
+  readonly fetch?: PreviewAccessFetch;
   /** Names the raw HAR file; any characters are safe. */
   readonly id: string;
   /** Records a HAR for `close({ harPath })`; on by default. */
@@ -391,6 +403,8 @@ const open = Effect.fn("E2EBrowserSession.open")(function* (options: {
           try: () => page.bringToFront(),
         });
       }),
+    addCookies: (label, cookies) =>
+      use(label, (page) => page.context().addCookies(cookies)),
     clearDiagnostics: (kind) =>
       Effect.sync(() => {
         state.diagnostics[kind].length = 0;
@@ -421,17 +435,10 @@ const open = Effect.fn("E2EBrowserSession.open")(function* (options: {
     diagnostics,
     evaluate: <A, Arg>(
       label: string,
-      fn: (arg: Arg) => A | Promise<A>,
+      fn: BrowserPageFunction<Arg, A>,
       arg: Arg,
       deadline?: E2EBrowserDeadline
-    ) =>
-      use(
-        label,
-        // Playwright types the argument as its serialized form; plain data is
-        // the same shape.
-        (page) => page.evaluate(fn as (arg: unknown) => A | Promise<A>, arg),
-        deadline
-      ),
+    ) => use(label, (page) => page.evaluate(fn, arg), deadline),
     primePreviewAccess: (url, bypassSecret, { timeoutMs }) =>
       Effect.suspend(() => {
         const origin = URL.parse(url)?.origin;

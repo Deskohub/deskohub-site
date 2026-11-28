@@ -69,7 +69,7 @@ test.skipIf(!chromiumAvailable)(
                   controller.enqueue(encoder.encode(shell));
                   await release.promise;
                   controller.enqueue(
-                    encoder.encode(flight.join("") + "</body></html>")
+                    encoder.encode(`${flight.join("")}</body></html>`)
                   );
                   controller.close();
                 },
