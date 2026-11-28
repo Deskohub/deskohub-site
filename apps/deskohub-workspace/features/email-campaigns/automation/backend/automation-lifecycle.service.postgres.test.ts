@@ -1,7 +1,8 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import type { AutomationFlowType } from "@deskohub/workspace-admin-api";
 import { Context, Deferred, Effect, Fiber } from "effect";
 import { SqlClient } from "effect/sql";
@@ -13,19 +14,21 @@ import {
   seedAutomatedSend,
   seedPublishedEmail,
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
-import type {
-  CampaignAudienceId,
-  CampaignId,
+import {
+  type CampaignAudienceId,
+  type CampaignId,
+  campaignAudienceIdSchema,
 } from "@/features/email-campaigns/campaign-identifiers";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   holdPostgresTransaction,
   waitForAdvisoryLockWaiter,
   waitForPostgresLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import type {
-  AutomationPreviewId,
-  AutomationVersionId,
+import {
+  type AutomationVersionId,
+  automationPreviewIdSchema,
 } from "../automation-identifiers";
 import {
   automationFlowFixture,
@@ -109,7 +112,7 @@ describe.skipIf(!testDatabase)(
           where a.campaign_id = $1`,
         [campaignId]
       );
-      return rows[0]!;
+      return requireValue(rows[0], "stored automation");
     };
 
     /** A timestamp column as an ISO instant, whatever the driver returns. */
@@ -269,7 +272,7 @@ describe.skipIf(!testDatabase)(
       );
       expect(frozen).toEqual({
         email_id: entryEmail.emailId,
-        frozen_email_version_id: v2!.id,
+        frozen_email_version_id: requireValue(v2, "published email version").id,
       });
       await run(lifecycle((service) => service.archive(campaignId)));
     });
@@ -576,7 +579,7 @@ describe.skipIf(!testDatabase)(
         const { campaignId } = await seedDraft({ flow: bookedSendFlow });
         const other = await seedDraft({ flow: bookedSendFlow });
         const previews = {
-          missing: crypto.randomUUID() as AutomationPreviewId,
+          missing: automationPreviewIdSchema.make(crypto.randomUUID()),
           running: await seedPreview(campaignId, { status: "running" }),
           superseded: await seedPreview(campaignId, { status: "superseded" }),
           failed: await seedPreview(campaignId, { status: "failed" }),
@@ -768,9 +771,8 @@ describe.skipIf(!testDatabase)(
             })
           )
         );
-        expect(error._tag).toBe("AutomationFlowInvalid");
-        expect(error).toHaveProperty("message");
-        expect((error as { message: string }).message).toContain(referenced);
+        assert(error._tag === "AutomationFlowInvalid");
+        expect(error.message).toContain(referenced);
       });
 
       test("reports the activation rule adapters gate on", async () => {
@@ -828,18 +830,21 @@ describe.skipIf(!testDatabase)(
             l.activate({ campaignId, previewId, activatedBy: accountId })
           )
         );
-        const [before] = await versionRows(campaignId);
+        const before = requireValue(
+          (await versionRows(campaignId))[0],
+          "first automation version"
+        );
 
         await pool.query('delete from auth."user" where id = $1', [accountId]);
         await pool.query("delete from email_campaign_audiences where id = $1", [
           audienceId,
         ]);
 
-        expect(await versionRows(campaignId)).toEqual([before!]);
+        expect(await versionRows(campaignId)).toEqual([before]);
         const { rows: provenance } = await pool.query(
           `select audience_id, activated_by_account_id
              from email_campaign_automation_version_provenance where version_id = $1`,
-          [before!.id]
+          [before.id]
         );
         expect(provenance).toEqual([
           { audience_id: null, activated_by_account_id: null },
@@ -860,7 +865,7 @@ describe.skipIf(!testDatabase)(
         await expect(
           pool.query(
             "update email_campaign_automation_versions set draft_hash = 'x' where id = $1",
-            [version!.id]
+            [requireValue(version, "stored automation version").id]
           )
         ).rejects.toThrow();
       });
@@ -889,11 +894,16 @@ describe.skipIf(!testDatabase)(
         const automation = await automationRow(campaignId);
         expect(automation).toMatchObject({
           status: "paused",
-          active_version_id: (await versionRows(campaignId))[1]!.id,
+          active_version_id: requireValue(
+            (await versionRows(campaignId))[1],
+            "second automation version"
+          ).id,
           accepting_since: null,
           next_fire_at: null,
         });
-        expect((await versionRows(campaignId))[0]).toEqual(v1!);
+        expect((await versionRows(campaignId))[0]).toEqual(
+          requireValue(v1, "first automation version")
+        );
         const versions = await run(
           lifecycle((l) => l.listVersions(campaignId))
         );
@@ -1006,7 +1016,7 @@ describe.skipIf(!testDatabase)(
             input.sendId ?? null,
           ]
         );
-        return rows[0]!.id;
+        return requireValue(rows[0], "inserted row").id;
       };
 
       const seedUnit = async (input: {
@@ -1032,7 +1042,7 @@ describe.skipIf(!testDatabase)(
             input.sendId ?? null,
           ]
         );
-        return rows[0]!.id;
+        return requireValue(rows[0], "inserted row").id;
       };
 
       const unitStates = async (unitIds: readonly string[]) => {
@@ -1060,7 +1070,10 @@ describe.skipIf(!testDatabase)(
       const seedBusy = async () => {
         const active = await seedActive(mondayFlow);
         const { campaignId } = active;
-        const versionId = (await automationRow(campaignId)).active_version_id!;
+        const versionId = requireValue(
+          (await automationRow(campaignId)).active_version_id,
+          "active version ID"
+        );
         await pool.query(
           `insert into email_campaign_automation_schedule_fires
              (campaign_id, fire_at, version_id, status, chunks_total)
@@ -1072,7 +1085,9 @@ describe.skipIf(!testDatabase)(
           versionId,
           purpose: "marketing",
           recipients: [
-            { dotyposCustomerId: `send-${runId}` as DotyposCustomerId },
+            {
+              dotyposCustomerId: DotyposCustomerIdSchema.make(`send-${runId}`),
+            },
           ],
         });
         const units = {
@@ -1351,7 +1366,7 @@ describe.skipIf(!testDatabase)(
            values ('Once', 'marketing', 'workspace', $1) returning id`,
           [JSON.stringify(campaignContentFixture())]
         );
-        const campaignId = rows[0]!.id;
+        const campaignId = requireValue(rows[0], "inserted campaign").id;
         campaignIds.push(campaignId);
         expect((await failure(lifecycle((l) => l.get(campaignId))))._tag).toBe(
           "CampaignDeliveryMismatch"
@@ -1425,7 +1440,7 @@ describe.skipIf(!testDatabase)(
       ).toBe("AutomationCalendarNeverOccurs");
 
       const missingAudience = inAudienceFlow(
-        crypto.randomUUID() as CampaignAudienceId
+        campaignAudienceIdSchema.make(crypto.randomUUID())
       );
       expect(
         (

@@ -11,12 +11,16 @@ import {
 import { type DotyposCustomerId, DotyposUnavailable } from "@deskohub/dotypos";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
 import type { AutomationFlowType } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { campaignContentFixture } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
-import type { AutomationWorkUnitId } from "../automation-identifiers";
+import {
+  type AutomationWorkUnitId,
+  automationRunIdSchema,
+} from "../automation-identifiers";
 import {
   databaseInstant,
   makeAutomationEngineScenario,
@@ -294,7 +298,12 @@ describe.skipIf(!database)("the automation engine's entry", async () => {
       endsAt: newEndsAt,
     });
     await scenario.drain(deferredAt);
-    return { ...visit, runId: started.id as string, newEndsAt, deferredAt };
+    return {
+      ...visit,
+      runId: Schema.decodeUnknownSync(automationRunIdSchema)(started.id),
+      newEndsAt,
+      deferredAt,
+    };
   };
 
   describe("entry", () => {
@@ -1509,7 +1518,9 @@ describe.skipIf(!database)(
           // Its settlement handed the slot to the waiting unit, whose batch
           // follows the replay.
           expect(keys.at(-2)).toBe(killedKey);
-          expect(requests().at(-1)!.to).toEqual([emailOf(other)]);
+          expect(
+            requireValue(requests().at(-1), "last email request").to
+          ).toEqual([emailOf(other)]);
           expect(await outcomes(waiting.campaignId)).toEqual({
             [other]: ["ended", "sent", null],
           });
@@ -1533,7 +1544,9 @@ describe.skipIf(!database)(
           const { rows } = await pool.query<{ count: number }>(
             "select count(*)::int as count from email_campaign_automation_work_units where kind = 'deliver' and status in ('enqueued', 'claimed')"
           );
-          inFlight.push(rows[0]!.count);
+          inFlight.push(
+            requireValue(rows[0], "in-flight deliver unit count").count
+          );
         });
         const at = start.add({ minutes: 1 });
         // Intake starts the runs and plans their deliver units (D36).
@@ -1929,12 +1942,14 @@ describe.skipIf(!database)(
     const unitsOf = async (campaignId: CampaignId, kind: string) =>
       (await read.units(campaignId)).filter((unit) => unit.kind === kind);
 
-    const inFlightUnits = async () =>
-      (
-        await pool.query<{ count: number }>(
-          "select count(*)::int as count from email_campaign_automation_work_units where status in ('enqueued', 'claimed')"
-        )
-      ).rows[0]!.count;
+    const inFlightUnits = async () => {
+      const {
+        rows: [row],
+      } = await pool.query<{ count: number }>(
+        "select count(*)::int as count from email_campaign_automation_work_units where status in ('enqueued', 'claimed')"
+      );
+      return requireValue(row, "in-flight work unit count").count;
+    };
 
     /** Takes `unitId`'s message off the queue, as its consumer receiving it would. */
     const takeMessage = (unitId: AutomationWorkUnitId) => {
@@ -2168,10 +2183,15 @@ describe.skipIf(!database)(
           "enqueued",
           "planned",
         ]);
-        const planned = before.find((unit) => unit.status === "planned")!;
-        const [claimed, enqueued] = before.filter(
+        const planned = requireValue(
+          before.find((unit) => unit.status === "planned"),
+          "planned deliver unit"
+        );
+        const [first, second] = before.filter(
           (unit) => unit.status === "enqueued"
         );
+        const claimed = requireValue(first, "first enqueued deliver unit");
+        const enqueued = requireValue(second, "second enqueued deliver unit");
 
         // One consumer is mid-verification when the pause lands.
         takeMessage(claimed.id);
@@ -2185,8 +2205,8 @@ describe.skipIf(!database)(
           (await deliverUnits()).map((unit) => [unit.id, unit])
         );
         expect(marked.get(planned.id)).toMatchObject({ status: "dropped" });
-        expect(marked.get(enqueued!.id)).toMatchObject({ status: "enqueued" });
-        expect(marked.get(enqueued!.id).cancel_requested_at).not.toBeNull();
+        expect(marked.get(enqueued.id)).toMatchObject({ status: "enqueued" });
+        expect(marked.get(enqueued.id).cancel_requested_at).not.toBeNull();
         expect(marked.get(claimed.id)).toMatchObject({ status: "claimed" });
         expect(marked.get(claimed.id).cancel_requested_at).not.toBeNull();
         // The planned unit's run is back with the planner; the others' wait.
@@ -2527,7 +2547,7 @@ describe.skipIf(!database)(
     const receiptSummary = async (campaignId: CampaignId) =>
       (await read.receipts(campaignId))
         .map((receipt) => ({
-          key: receipt.dedup_key as string,
+          key: Schema.decodeUnknownSync(Schema.String)(receipt.dedup_key),
           disposition: receipt.disposition,
           versionId: receipt.version_id,
         }))
@@ -2701,7 +2721,10 @@ describe.skipIf(!database)(
         expect(iso((await read.automation(campaignId)).next_fire_at)).toBe(
           fourthMonday.toString()
         );
-        expect(third).toBeDefined();
+        const thirdCustomer = requireValue(
+          third,
+          "customer added during the second fire"
+        );
         expect(
           (await receiptSummary(campaignId)).map(({ key, disposition }) => ({
             key,
@@ -2732,7 +2755,7 @@ describe.skipIf(!database)(
               disposition: "already-active",
             },
             {
-              key: scheduleDedupKey(thirdMonday, third!),
+              key: scheduleDedupKey(thirdMonday, thirdCustomer),
               disposition: "started",
             },
           ].sort((a, b) => a.key.localeCompare(b.key))
@@ -2759,10 +2782,10 @@ describe.skipIf(!database)(
             [early, firstMonday.toString(), "sent"],
             [early, thirdMonday.toString(), "condition-failed"],
             [second, secondMonday.toString(), "sent"],
-            [third!, thirdMonday.toString(), "sent"],
+            [thirdCustomer, thirdMonday.toString(), "sent"],
           ].sort()
         );
-        for (const customer of [early, second, third!]) {
+        for (const customer of [early, second, thirdCustomer]) {
           expect(mailedTo(customer)).toBe(1);
         }
       });
@@ -3111,7 +3134,10 @@ describe.skipIf(!database)(
                     delivery.outcome === "redelivered"
                 )
               )
-              .map((unit) => [unit.kind as string, unit])
+              .map((unit) => [
+                Schema.decodeUnknownSync(Schema.String)(unit.kind),
+                unit,
+              ])
           );
         const failed = await failedKinds();
         expect([...failed.keys()]).toEqual(

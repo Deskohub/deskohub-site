@@ -2,6 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -20,7 +22,7 @@ import {
   type DatePeriodType,
 } from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, like } from "drizzle-orm";
-import { Effect, Exit, Layer, Schema } from "effect";
+import { Array as Arr, Effect, Exit, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
   customerAccounts,
@@ -40,9 +42,13 @@ import {
   emailCampaigns,
   workspaceReservations,
 } from "@/db/schema";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { getPassReminderEndDates } from "@/features/passes/pass-reminder-schedule";
-import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -64,7 +70,10 @@ import type {
   CampaignId,
 } from "../../campaign-identifiers";
 import { campaignLocales } from "../../recipient-locale";
-import type { AutomationPreviewId } from "../automation-identifiers";
+import type {
+  AutomationPreviewId,
+  AutomationWorkUnitId,
+} from "../automation-identifiers";
 import { oneOffCampaignGapEndsAt } from "../automation-send-policies";
 import { automationTickAtOrAfter } from "../automation-ticks";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
@@ -122,7 +131,7 @@ const profile = (
 ) =>
   ({
     id,
-    _cloudId: "dry-run-cloud",
+    _cloudId: DotyposCloudIdSchema.make("dry-run-cloud"),
     firstName: "Test",
     lastName: id.slice(-4),
     email: options.email ?? testEmailAddress(id),
@@ -131,9 +140,12 @@ const profile = (
     display: true,
     deleted: false,
     tags: options.tags ?? [],
-  }) as DotyposCustomer;
+  }) satisfies DotyposCustomer;
 
 const decodeFlow = Schema.decodeUnknownSync(AutomationFlow);
+const readPreviewCustomers = Schema.decodeUnknownSync(
+  Schema.Struct({ customerIds: Schema.Array(DotyposCustomerIdSchema) })
+);
 
 const send = { _tag: "Send", id: "send" } as const;
 const waitHours = (id: string, count: number) => ({
@@ -170,18 +182,19 @@ const weekly = (weekday: string) => ({
 
 /** The mutable Dotypos fake: tests change what it returns between previews. */
 const dotyposState = {
-  customers: [] as DotyposCustomer[],
-  reservations: [] as DotyposReservation[],
+  customers: Arr.empty<DotyposCustomer>(),
+  reservations: Arr.empty<DotyposReservation>(),
   failNextCustomerPage: false,
-  customerPageCalls: [] as number[],
+  customerPageCalls: Arr.empty<number>(),
   reservationReads: 0,
   /** Fails every reservation lookup by id that asks for any id. */
   failReservationLookups: false,
-  reservationLookups: [] as number[],
+  reservationLookups: Arr.empty<number>(),
 };
 const dotypos = DotyposServiceMock({
   getCustomersByIds: (ids) => {
-    dotyposState.customerPageCalls.push(ids.length);
+    const requested = [...ids];
+    dotyposState.customerPageCalls.push(requested.length);
     if (dotyposState.failNextCustomerPage) {
       dotyposState.failNextCustomerPage = false;
       return Effect.fail(
@@ -194,7 +207,7 @@ const dotypos = DotyposServiceMock({
     }
     return makeInMemoryDotypos({
       customers: dotyposState.customers,
-    }).service.getCustomersByIds(ids);
+    }).service.getCustomersByIds(requested);
   },
 
   listReservations: (options) => {
@@ -240,7 +253,7 @@ describe.skipIf(!testDatabase)(
     const kit = automationLifecycleTestKit(testDatabase, { now });
     const campaignIds: CampaignId[] = [];
     const audienceIds: CampaignAudienceId[] = [];
-    const reservationIds: string[] = [];
+    const reservationIds: WorkspaceReservationId[] = [];
     /** Campaigns whose seeded claims must go before their runs. */
     const claimedCampaignIds: CampaignId[] = [];
 
@@ -311,7 +324,7 @@ describe.skipIf(!testDatabase)(
       );
 
     /** Delivers one unit: enqueues it as a promotion would, then processes it. */
-    const processUnit = async (unitId: string) => {
+    const processUnit = async (unitId: AutomationWorkUnitId) => {
       await query(
         db
           .update(emailCampaignAutomationWorkUnits)
@@ -328,7 +341,7 @@ describe.skipIf(!testDatabase)(
       );
       return Effect.runPromiseExit(
         Effect.flatMap(AutomationUnitProcessor, (processor) =>
-          processor.process(unitId as never)
+          processor.process(unitId)
         ).pipe(Effect.provide(await engineLayer))
       );
     };
@@ -362,7 +375,7 @@ describe.skipIf(!testDatabase)(
           .select()
           .from(emailCampaignAutomationPreviews)
           .where(eq(emailCampaignAutomationPreviews.id, previewId))
-      ).then(([row]) => row!);
+      ).then(([row]) => requireValue(row));
 
     const seedAudience = async (filter: AudienceFilter) => {
       const [audience] = await query(
@@ -371,8 +384,8 @@ describe.skipIf(!testDatabase)(
           .values({ title: `Dry run ${runId}`, filter })
           .returning({ id: emailCampaignAudiences.id })
       );
-      audienceIds.push(audience!.id);
-      return audience!.id;
+      audienceIds.push(requireValue(audience).id);
+      return requireValue(audience).id;
     };
 
     /** An automated campaign with its audience and working-copy flow. */
@@ -466,8 +479,8 @@ describe.skipIf(!testDatabase)(
           (reservation) =>
             ({
               id: dotyposReservationIdOf(reservation.label),
-              _branchId: "dry-run-branch",
-              _cloudId: "dry-run-cloud",
+              _branchId: DotyposBranchIdSchema.make("dry-run-branch"),
+              _cloudId: DotyposCloudIdSchema.make("dry-run-cloud"),
               _customerId: reservation.customer,
               startDate: reservation.startsAt.toString(),
               endDate: reservation.endsAt.toString(),
@@ -517,7 +530,7 @@ describe.skipIf(!testDatabase)(
         dotyposCustomerId: event.customer,
         workspaceReservationId: reservationIdOf(event.reservation),
       }));
-      const ids: string[] = [];
+      const ids: (typeof customerEvents.$inferSelect)["id"][] = [];
       for (let index = 0; index < rows.length; index += 500) {
         const inserted = await query(
           db
@@ -625,21 +638,13 @@ describe.skipIf(!testDatabase)(
 
     test("replays 30 days of events with per-customer overlays", async () => {
       const [alice, bob, carol, dave, erin, frank, gina] = [
-        "alice",
-        "bob",
-        "carol",
-        "dave",
-        "erin",
-        "frank",
-        "gina",
-      ].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+        customerId("alice"),
+        customerId("bob"),
+        customerId("carol"),
+        customerId("dave"),
+        customerId("erin"),
+        customerId("frank"),
+        customerId("gina"),
       ];
       const finished = (
         label: string,
@@ -744,40 +749,40 @@ describe.skipIf(!testDatabase)(
       );
       const byEvent = new Map(rows.map((row) => [row.customerEventId, row]));
 
-      expect(byEvent.get(e1!)).toMatchObject({
+      expect(byEvent.get(requireValue(e1))).toMatchObject({
         outcome: "would-send",
         stepId: "send",
         projected: false,
       });
       // On the engine tick: the event's tick, a day later.
-      expect(byEvent.get(e1!)?.sendAt).toEqual(
+      expect(byEvent.get(requireValue(e1))?.sendAt).toEqual(
         automationTickAtOrAfter(ago({ hours: 24 * 19 }))
       );
       // D4: the first run is still waiting.
-      expect(byEvent.get(e2!)?.outcome).toBe("already-active");
+      expect(byEvent.get(requireValue(e2))?.outcome).toBe("already-active");
       // The simulated send counts toward "this campaign" afterwards.
-      expect(byEvent.get(e3!)).toMatchObject({
+      expect(byEvent.get(requireValue(e3))).toMatchObject({
         outcome: "condition-failed",
         stepId: "first",
       });
-      expect(byEvent.get(bobEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(bobEvent))).toMatchObject({
         outcome: "withdrawn",
         stepId: null,
       });
       // Cancelled in Workspace before the send: withdrawn at the send step.
-      expect(byEvent.get(carolEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(carolEvent))).toMatchObject({
         outcome: "withdrawn",
         stepId: "send",
       });
       // Cancelled only after the email went out.
-      expect(byEvent.get(daveEvent!)?.outcome).toBe("would-send");
-      expect(byEvent.get(erinEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(daveEvent))?.outcome).toBe("would-send");
+      expect(byEvent.get(requireValue(erinEvent))).toMatchObject({
         outcome: "would-send",
         projected: true,
       });
-      expect(byEvent.get(frankEvent!)?.outcome).toBe("would-send");
-      expect(byEvent.has(ginaFirst!)).toBe(false);
-      expect(byEvent.get(ginaSecond!)?.outcome).toBe("would-send");
+      expect(byEvent.get(requireValue(frankEvent))?.outcome).toBe("would-send");
+      expect(byEvent.has(requireValue(ginaFirst))).toBe(false);
+      expect(byEvent.get(requireValue(ginaSecond))?.outcome).toBe("would-send");
 
       const dryRun = await read(started.previewId);
       expect(dryRun.counts["already-active"]).toBeGreaterThanOrEqual(1);
@@ -787,15 +792,22 @@ describe.skipIf(!testDatabase)(
     });
 
     test("replays a sign-up's account creation but never an existing customer's", async () => {
-      const [newcomer, existing] = ["d37-signup", "d37-legacy"].map(
-        customerId
-      ) as [DotyposCustomerId, DotyposCustomerId];
+      const [newcomer, existing] = [
+        customerId("d37-signup"),
+        customerId("d37-legacy"),
+      ];
       dotyposState.customers.push(profile(newcomer), profile(existing));
       // The capture reconciler recorded the existing customer's event before
       // it skipped legacy accounts (D37).
       const accounts = [
-        { id: `${newcomer}-account` as CustomerAccountId, legacy: false },
-        { id: `${existing}-account` as CustomerAccountId, legacy: true },
+        {
+          id: customerAccountIdSchema.make(`${newcomer}-account`),
+          legacy: false,
+        },
+        {
+          id: customerAccountIdSchema.make(`${existing}-account`),
+          legacy: true,
+        },
       ];
       await query(
         Effect.forEach(accounts, (account) =>
@@ -812,7 +824,7 @@ describe.skipIf(!testDatabase)(
                 occurredAt: ago({ hours: 24 * 3 }),
                 recordedAt: ago({ hours: 24 * 3 }),
                 dotyposCustomerId: customer,
-                customerAccountId: accounts[index]!.id,
+                customerAccountId: requireValue(accounts[index]).id,
               }))
             )
             .returning({ id: customerEvents.id })
@@ -829,7 +841,9 @@ describe.skipIf(!testDatabase)(
         await processAll(started.previewId);
 
         const rows = await rowsOf(started.previewId);
-        expect(rows.map((row) => row.customerEventId)).toEqual([events[0]!.id]);
+        expect(rows.map((row) => row.customerEventId)).toEqual([
+          requireValue(events[0]).id,
+        ]);
         expect((await read(started.previewId)).eventsTotal).toBe(1);
       } finally {
         // Their events go with the accounts.
@@ -869,9 +883,10 @@ describe.skipIf(!testDatabase)(
        * campaign's email two days before it, the other five days after it.
        */
       const seedCustomers = async (label: string) => {
-        const [before, after] = [`${label}-before`, `${label}-after`].map(
-          customerId
-        ) as [DotyposCustomerId, DotyposCustomerId];
+        const [before, after] = [
+          customerId(`${label}-before`),
+          customerId(`${label}-after`),
+        ];
         await seedReservations(
           [before, after].map((customer, index) => ({
             label: `${label}-${index}`,
@@ -912,7 +927,11 @@ describe.skipIf(!testDatabase)(
               )
           );
         }
-        return { other, before: beforeEvent!, after: afterEvent! };
+        return {
+          other,
+          before: requireValue(beforeEvent),
+          after: requireValue(afterEvent),
+        };
       };
 
       /** Each event's outcome in a completed dry run of the flow. */
@@ -1011,9 +1030,10 @@ describe.skipIf(!testDatabase)(
        * booked another five days after it.
        */
       const seedBookers = async (label: string) => {
-        const [steady, later] = [`${label}-steady`, `${label}-later`].map(
-          customerId
-        ) as [DotyposCustomerId, DotyposCustomerId];
+        const [steady, later] = [
+          customerId(`${label}-steady`),
+          customerId(`${label}-later`),
+        ];
         const upcoming = {
           startsAt: triggerAt.add({ hours: 24 * 20 }),
           endsAt: triggerAt.add({ hours: 24 * 20 + 2 }),
@@ -1049,7 +1069,10 @@ describe.skipIf(!testDatabase)(
             occurredAt: triggerAt,
           }))
         );
-        return { steady: steadyEvent!, later: laterEvent! };
+        return {
+          steady: requireValue(steadyEvent),
+          later: requireValue(laterEvent),
+        };
       };
 
       test("an entry gate counts reservations booked by the event", async () => {
@@ -1106,9 +1129,11 @@ describe.skipIf(!testDatabase)(
 
       test("an entry gate reads reservation statuses as they stood at the event, and marks undated ones", async () => {
         const label = "status-gate";
-        const [dated, undated, settled] = ["dated", "undated", "settled"].map(
-          (role) => customerId(`${label}-${role}`)
-        ) as [DotyposCustomerId, DotyposCustomerId, DotyposCustomerId];
+        const [dated, undated, settled] = [
+          customerId(`${label}-dated`),
+          customerId(`${label}-undated`),
+          customerId(`${label}-settled`),
+        ];
         const customers = [dated, undated, settled];
         const twoDaysAfter = triggerAt.add({ hours: 24 * 2 });
         await seedReservations(
@@ -1177,17 +1202,17 @@ describe.skipIf(!testDatabase)(
         );
         const [datedEvent, undatedEvent, settledEvent] = events;
 
-        expect(byEvent.get(datedEvent!)).toMatchObject({
+        expect(byEvent.get(requireValue(datedEvent))).toMatchObject({
           outcome: "would-send",
           reservationStatusesApproximate: false,
         });
         // Read as it is now, which may not be how it stood at the event.
-        expect(byEvent.get(undatedEvent!)).toMatchObject({
+        expect(byEvent.get(requireValue(undatedEvent))).toMatchObject({
           outcome: "not-in-audience",
           reservationStatusesApproximate: true,
         });
         // Unchanged since before the event, so exact.
-        expect(byEvent.get(settledEvent!)).toMatchObject({
+        expect(byEvent.get(requireValue(settledEvent))).toMatchObject({
           outcome: "not-in-audience",
           reservationStatusesApproximate: false,
         });
@@ -1201,9 +1226,10 @@ describe.skipIf(!testDatabase)(
       test("an approximate admission marks the events it holds off and the later ones that count its send", async () => {
         const label = "status-carry";
         const roles = ["carried", "exact"] as const;
-        const [carried, exact] = roles.map((role) =>
-          customerId(`${label}-${role}`)
-        ) as [DotyposCustomerId, DotyposCustomerId];
+        const [carried, exact] = [
+          customerId(`${label}-${roles[0]}`),
+          customerId(`${label}-${roles[1]}`),
+        ];
         const twoDaysAfter = triggerAt.add({ hours: 24 * 2 });
         const visitEnds = [
           triggerAt,
@@ -1282,7 +1308,7 @@ describe.skipIf(!testDatabase)(
         );
         const outcomes = (ids: readonly (string | undefined)[]) =>
           ids.map((id) => {
-            const row = byEvent.get(id!);
+            const row = byEvent.get(requireValue(id));
             return [row?.outcome, row?.reservationStatusesApproximate];
           });
 
@@ -1313,7 +1339,7 @@ describe.skipIf(!testDatabase)(
       await seedReservations(
         labels.map((label, index) => ({
           label,
-          customer: customers[index % 3]!,
+          customer: requireValue(customers[index % 3]),
           startsAt: ago({ hours: 24 * 40 }),
           endsAt: ago({ hours: 24 * 40 - 1 }),
           workspaceCancelledAt: cancelledAt(index),
@@ -1323,7 +1349,7 @@ describe.skipIf(!testDatabase)(
         labels.map((label, index) => ({
           kind: "reservation-cancelled",
           reservation: label,
-          customer: customers[index % 3]!,
+          customer: requireValue(customers[index % 3]),
           occurredAt: cancelledAt(index),
         }))
       );
@@ -1380,10 +1406,10 @@ describe.skipIf(!testDatabase)(
     });
 
     test("a stay trigger replays only the visits of its stay", async () => {
-      const [ida, jack, lena] = ["ida", "jack", "lena"].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+      const [ida, jack, lena] = [
+        customerId("ida"),
+        customerId("jack"),
+        customerId("lena"),
       ];
       const noonDaysAgo = (days: number) =>
         pragueOf(ago({ hours: 24 * days }))
@@ -1459,17 +1485,14 @@ describe.skipIf(!testDatabase)(
           (row): [string | null, string] => [row.customerEventId, row.outcome]
         )
       );
-      expect(outcomes.has(idaEvent!)).toBe(false);
-      expect(outcomes.get(jackDay!)).toBe("would-send");
-      expect(outcomes.has(jackOvernight!)).toBe(false);
-      expect(outcomes.get(lenaDay!)).toBe("would-send");
+      expect(outcomes.has(requireValue(idaEvent))).toBe(false);
+      expect(outcomes.get(requireValue(jackDay))).toBe("would-send");
+      expect(outcomes.has(requireValue(jackOvernight))).toBe(false);
+      expect(outcomes.get(requireValue(lenaDay))).toBe("would-send");
     });
 
     test("a payment trigger replays only individually paid reservations", async () => {
-      const [mona, nina] = ["mona", "nina"].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-      ];
+      const [mona, nina] = [customerId("mona"), customerId("nina")];
       const finishedAt = ago({ hours: 24 * 4 });
       await seedReservations(
         [
@@ -1522,8 +1545,8 @@ describe.skipIf(!testDatabase)(
           (row): [string | null, string] => [row.customerEventId, row.outcome]
         )
       );
-      expect(outcomes.get(monaEvent!)).toBe("would-send");
-      expect(outcomes.has(ninaEvent!)).toBe(false);
+      expect(outcomes.get(requireValue(monaEvent))).toBe("would-send");
+      expect(outcomes.has(requireValue(ninaEvent))).toBe(false);
 
       // A unit that kept missing its deadline still judges payment locally.
       const fallback = await start(
@@ -1548,15 +1571,15 @@ describe.skipIf(!testDatabase)(
           (row): [string | null, string] => [row.customerEventId, row.outcome]
         )
       );
-      expect(fallbackOutcomes.get(monaEvent!)).toBe("unavailable");
-      expect(fallbackOutcomes.has(ninaEvent!)).toBe(false);
+      expect(fallbackOutcomes.get(requireValue(monaEvent))).toBe("unavailable");
+      expect(fallbackOutcomes.has(requireValue(ninaEvent))).toBe(false);
     });
 
     test("a unit past its deadline still drops events payment and stored tiers settle", async () => {
-      const [ola, pia, quin] = ["ola", "pia", "quin"].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+      const [ola, pia, quin] = [
+        customerId("ola"),
+        customerId("pia"),
+        customerId("quin"),
       ];
       const finishedAt = ago({ hours: 24 * 3 });
       const reservations = {
@@ -1640,16 +1663,13 @@ describe.skipIf(!testDatabase)(
       );
       // Open Space can't be overnight; the unpaid one fails payment; only
       // the paid Reserved Desk visit needs its unread interval.
-      expect(outcomes.has(olaEvent!)).toBe(false);
-      expect(outcomes.has(quinEvent!)).toBe(false);
-      expect(outcomes.get(piaEvent!)).toBe("unavailable");
+      expect(outcomes.has(requireValue(olaEvent))).toBe(false);
+      expect(outcomes.has(requireValue(quinEvent))).toBe(false);
+      expect(outcomes.get(requireValue(piaEvent))).toBe("unavailable");
     });
 
     test("a stay its stored tiers rule out reads no visits, so Dotypos can't stall the replay", async () => {
-      const [rita, sven] = ["rita", "sven"].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-      ];
+      const [rita, sven] = [customerId("rita"), customerId("sven")];
       const finishedAt = ago({ hours: 24 * 2 });
       const labels = { "rita-open-space": rita, "sven-open-space": sven };
       await seedReservations(
@@ -1795,15 +1815,10 @@ describe.skipIf(!testDatabase)(
 
     test("a Workspace-cancelled reservation skips the live re-check, which compares at stored precision, and a standing cancellation trigger is not withdrawn", async () => {
       const [moved, movedCancelled, sameMoment, cancellation] = [
-        "recheck-moved",
-        "recheck-moved-cancelled",
-        "recheck-same-moment",
-        "recheck-cancellation",
-      ].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+        customerId("recheck-moved"),
+        customerId("recheck-moved-cancelled"),
+        customerId("recheck-same-moment"),
+        customerId("recheck-cancellation"),
       ];
       const finishedAt = ago({ hours: 24 * 9 });
       // Dotypos already reports each visit as it stands now.
@@ -1896,21 +1911,25 @@ describe.skipIf(!testDatabase)(
         ].map((row) => [row.customerEventId, row])
       );
       // The visit moved past the event, so the sweep's later event stands for it.
-      expect(byEvent.has(movedEvent!)).toBe(false);
+      expect(byEvent.has(requireValue(movedEvent))).toBe(false);
       // Cancelled in Workspace before the send: the pre-submit check withdraws it.
-      expect(byEvent.get(movedCancelledEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(movedCancelledEvent))).toMatchObject({
         outcome: "withdrawn",
         stepId: "send",
       });
-      expect(byEvent.get(sameMomentEvent!)?.outcome).toBe("would-send");
-      expect(byEvent.get(cancellationEvent!)?.outcome).toBe("would-send");
+      expect(byEvent.get(requireValue(sameMomentEvent))?.outcome).toBe(
+        "would-send"
+      );
+      expect(byEvent.get(requireValue(cancellationEvent))?.outcome).toBe(
+        "would-send"
+      );
     });
 
     test("a cancellation a restore undid is withdrawn before entry, and the reservation's later cancellation replays", async () => {
       const [restored, cancelledAgain] = [
-        "undone-restored",
-        "undone-again",
-      ].map(customerId) as [DotyposCustomerId, DotyposCustomerId];
+        customerId("undone-restored"),
+        customerId("undone-again"),
+      ];
       // The newest cancellations, so the 1,000-event cap keeps them.
       const firstCancelledAt = ago({ minutes: 45 });
       const secondCancelledAt = ago({ minutes: 20 });
@@ -1965,15 +1984,15 @@ describe.skipIf(!testDatabase)(
           row,
         ])
       );
-      expect(byEvent.get(restoredEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(restoredEvent))).toMatchObject({
         outcome: "withdrawn",
         stepId: null,
       });
-      expect(byEvent.get(undoneEvent!)).toMatchObject({
+      expect(byEvent.get(requireValue(undoneEvent))).toMatchObject({
         outcome: "withdrawn",
         stepId: null,
       });
-      expect(byEvent.get(againEvent!)?.outcome).toBe("would-send");
+      expect(byEvent.get(requireValue(againEvent))?.outcome).toBe("would-send");
     });
 
     test("a saved audience edited after planning still evaluates", async () => {
@@ -2008,7 +2027,7 @@ describe.skipIf(!testDatabase)(
         _tag: "Condition",
         operator: "is",
         value: true,
-      } as AudienceFilter);
+      });
       const campaignId = await seedAutomation({
         flow: decodeFlow({
           trigger: { _tag: "ReservationCancelled" },
@@ -2036,7 +2055,7 @@ describe.skipIf(!testDatabase)(
               _tag: "Condition",
               operator: "in",
               value: { _tag: "Last", count: 1, unit: "year" },
-            } as AudienceFilter,
+            },
           })
           .where(eq(emailCampaignAudiences.id, savedAudience))
       );
@@ -2055,17 +2074,11 @@ describe.skipIf(!testDatabase)(
     test("a Send's delivery policies skip, defer and hold off replayed sends", async () => {
       const triggerAt = ago({ hours: 24 * 10 });
       const [plain, claimed, gapped, packHolder, unlimitedHolder] = [
-        "policy-plain",
-        "policy-claimed",
-        "policy-gapped",
-        "policy-pack",
-        "policy-unlimited",
-      ].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+        customerId("policy-plain"),
+        customerId("policy-claimed"),
+        customerId("policy-gapped"),
+        customerId("policy-pack"),
+        customerId("policy-unlimited"),
       ];
       const { campaignId, previewId: activationPreviewId } =
         await kit.seedActive(
@@ -2124,7 +2137,7 @@ describe.skipIf(!testDatabase)(
       );
       const claimingRun = await seedAutomationRun(db, {
         campaignId,
-        versionId: version!.id,
+        versionId: requireValue(version).id,
         customerId: claimed,
         stepId: "send",
         phase: "waiting",
@@ -2167,7 +2180,7 @@ describe.skipIf(!testDatabase)(
       await query(
         db.insert(emailCampaignDeliveryBatches).values({
           sendId: requested.sendId,
-          deliveryAttempt: pending!.deliveryAttempt,
+          deliveryAttempt: requireValue(pending).deliveryAttempt,
           batchIndex: 0,
           dotyposCustomerIds: [gapped],
           payloadHash: "synthetic-payload-hash",
@@ -2274,15 +2287,10 @@ describe.skipIf(!testDatabase)(
 
     test("a stay and payment trigger replays only qualifying visits through its Send's policies", async () => {
       const [repeat, holder, unpaidHolder, overnight] = [
-        "qualified-repeat",
-        "qualified-holder",
-        "qualified-unpaid-holder",
-        "qualified-overnight",
-      ].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+        customerId("qualified-repeat"),
+        customerId("qualified-holder"),
+        customerId("qualified-unpaid-holder"),
+        customerId("qualified-overnight"),
       ];
       const noonDaysAgo = (days: number) =>
         pragueOf(ago({ hours: 24 * days }))
@@ -2442,13 +2450,9 @@ describe.skipIf(!testDatabase)(
     test("an earlier version's sent run counts as sent once, and skipping pass holders reads marketing consent on an operational campaign", async () => {
       const triggerAt = ago({ hours: 24 * 10 });
       const [plain, sentEarlier, withdrawn] = [
-        "policy-op-plain",
-        "policy-op-sent-earlier",
-        "policy-op-withdrawn",
-      ].map(customerId) as [
-        DotyposCustomerId,
-        DotyposCustomerId,
-        DotyposCustomerId,
+        customerId("policy-op-plain"),
+        customerId("policy-op-sent-earlier"),
+        customerId("policy-op-withdrawn"),
       ];
       const { campaignId, previewId: activationPreviewId } =
         await kit.seedActive(
@@ -2490,7 +2494,7 @@ describe.skipIf(!testDatabase)(
       );
       const sendId = await seedAutomatedSend(db, {
         campaignId,
-        versionId: version!.id,
+        versionId: requireValue(version).id,
         purpose: "operational",
         recipients: [
           { dotyposCustomerId: sentEarlier, status: "sent" as const },
@@ -2498,7 +2502,7 @@ describe.skipIf(!testDatabase)(
       });
       const earlierRun = await seedAutomationRun(db, {
         campaignId,
-        versionId: version!.id,
+        versionId: requireValue(version).id,
         customerId: sentEarlier,
         stepId: "send",
         phase: "ready",
@@ -2601,13 +2605,15 @@ describe.skipIf(!testDatabase)(
             row,
           ])
         );
-        expect(rows.get(customers[0]!)).toMatchObject({
+        expect(rows.get(requireValue(customers[0]))).toMatchObject({
           outcome: "would-send",
           stepId: "send",
           projected: true,
         });
-        expect(rows.get(customers[0]!)?.sendAt?.equals(fire)).toBe(true);
-        expect(rows.get(customers[20]!)).toMatchObject({
+        expect(rows.get(requireValue(customers[0]))?.sendAt?.equals(fire)).toBe(
+          true
+        );
+        expect(rows.get(requireValue(customers[20]))).toMatchObject({
           outcome: "condition-failed",
           stepId: "vip",
         });
@@ -2622,7 +2628,10 @@ describe.skipIf(!testDatabase)(
             .from(emailCampaignAutomations)
             .where(eq(emailCampaignAutomations.campaignId, campaignId))
         );
-        const nextMonday = active!.nextFireAt!;
+        const nextMonday = requireValue(
+          requireValue(active, "active automation").nextFireAt,
+          "next Monday fire"
+        );
         expect(pragueOf(nextMonday).dayOfWeek).toBe(1);
         await kit.run(
           kit.lifecycle((lifecycle) =>
@@ -2661,8 +2670,12 @@ describe.skipIf(!testDatabase)(
         // The last unit fails its Dotypos read once and is redelivered.
         const [last, ...rest] = units.toReversed();
         dotyposState.failNextCustomerPage = true;
-        expect(Exit.isFailure(await processUnit(last!.id))).toBe(true);
-        expect(Exit.isSuccess(await processUnit(last!.id))).toBe(true);
+        expect(Exit.isFailure(await processUnit(requireValue(last).id))).toBe(
+          true
+        );
+        expect(Exit.isSuccess(await processUnit(requireValue(last).id))).toBe(
+          true
+        );
         for (const unit of rest) {
           expect(Exit.isSuccess(await processUnit(unit.id))).toBe(true);
         }
@@ -2674,7 +2687,7 @@ describe.skipIf(!testDatabase)(
         });
         const rows = await rowsOf(started.previewId);
         const subjects = units.flatMap(
-          (unit) => (unit.subject as { customerIds: string[] }).customerIds
+          (unit) => readPreviewCustomers(unit.subject).customerIds
         );
         expect(rows.length).toBe(subjects.length);
         expect(new Set(rows.map((row) => row.dotyposCustomerId)).size).toBe(
@@ -2709,18 +2722,22 @@ describe.skipIf(!testDatabase)(
         });
         const started = await start(campaignId);
         const [first, second, ...rest] = await unitsOf(started.previewId);
-        expect(Exit.isSuccess(await processUnit(first!.id))).toBe(true);
+        expect(Exit.isSuccess(await processUnit(requireValue(first).id))).toBe(
+          true
+        );
         const written = (await rowsOf(started.previewId)).length;
 
         await editFlow(campaignId, scheduleFlow("thursday", "edited"));
-        expect(Exit.isSuccess(await processUnit(second!.id))).toBe(true);
+        expect(Exit.isSuccess(await processUnit(requireValue(second).id))).toBe(
+          true
+        );
 
         expect((await previewRow(started.previewId)).status).toBe("superseded");
         expect((await rowsOf(started.previewId)).length).toBe(written);
         const units = await unitsOf(started.previewId);
-        expect(units.find((unit) => unit.id === second!.id)?.status).toBe(
-          "done"
-        );
+        expect(
+          units.find((unit) => unit.id === requireValue(second).id)?.status
+        ).toBe("done");
         // Planned units drop; ones a hand-off already enqueued are marked.
         expect(
           units
@@ -2782,11 +2799,11 @@ describe.skipIf(!testDatabase)(
         const named = page.customers.find(
           ({ customerId }) => customerId === customers[0]
         );
-        expect(named?.email).toBe(testEmailAddress(customers[0]!));
+        expect(named?.email).toBe(testEmailAddress(requireValue(customers[0])));
         expect(page.nextCursor).not.toBeNull();
 
         const next = await read(started.previewId, {
-          cursor: page.nextCursor!,
+          cursor: requireValue(page.nextCursor),
         });
         expect(next.rows.length).toBeGreaterThan(0);
         expect(
@@ -2806,12 +2823,16 @@ describe.skipIf(!testDatabase)(
           db
             .update(emailCampaignAutomationWorkUnits)
             .set({ deadlineMisses: 3 })
-            .where(eq(emailCampaignAutomationWorkUnits.id, unit!.id))
+            .where(
+              eq(emailCampaignAutomationWorkUnits.id, requireValue(unit).id)
+            )
         );
-        expect(Exit.isSuccess(await processUnit(unit!.id))).toBe(true);
+        expect(Exit.isSuccess(await processUnit(requireValue(unit).id))).toBe(
+          true
+        );
         const rows = await rowsOf(started.previewId);
         expect(rows.length).toBe(
-          (unit!.subject as { customerIds: string[] }).customerIds.length
+          readPreviewCustomers(requireValue(unit).subject).customerIds.length
         );
         expect(rows.every((row) => row.outcome === "unavailable")).toBe(true);
       });
@@ -3233,8 +3254,9 @@ describe.skipIf(!testDatabase)(
         const row = rows.find(
           (candidate) => candidate.customer_event_id === run.trigger_event_id
         );
-        expect(row).toBeDefined();
-        expect(rowOutcome(row!)).toEqual(engineOutcome(run));
+        expect(rowOutcome(requireValue(row, "row for the live run"))).toEqual(
+          engineOutcome(run)
+        );
       }
       const byCustomer = new Map(
         runs.map((run) => [run.dotypos_customer_id, engineOutcome(run)])
@@ -3351,19 +3373,23 @@ describe.skipIf(!testDatabase)(
       const run = runs.find(
         (candidate) => candidate.dotypos_customer_id === customer
       );
-      expect(rowOutcome(row!)).toEqual({
+      expect(rowOutcome(requireValue(row))).toEqual({
         outcome: "would-send",
         stepId: "send",
         sendAt: nextMonday,
       });
-      expect(engineOutcome(run!)).toEqual(rowOutcome(row!));
+      expect(engineOutcome(requireValue(run))).toEqual(
+        rowOutcome(requireValue(row))
+      );
       for (const other of runs) {
         expect(
           rowOutcome(
-            rows.find(
-              (candidate) =>
-                candidate.dotypos_customer_id === other.dotypos_customer_id
-            )!
+            requireValue(
+              rows.find(
+                (candidate) =>
+                  candidate.dotypos_customer_id === other.dotypos_customer_id
+              )
+            )
           )
         ).toEqual(engineOutcome(other));
       }

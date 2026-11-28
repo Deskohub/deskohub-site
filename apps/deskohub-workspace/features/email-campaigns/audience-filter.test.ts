@@ -11,6 +11,7 @@ import {
   type DatePeriodType,
 } from "@deskohub/workspace-admin-api";
 import { Option, Result, Schema } from "effect";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import { newCondition } from "./admin/audiences/audience-filter-editing";
 import {
   type AudienceCandidate,
@@ -51,7 +52,7 @@ const candidate: AudienceCandidate = {
 };
 
 const profile = (fields: Partial<DotyposCustomer>) =>
-  Option.some({ deleted: false, ...fields } as DotyposCustomer);
+  Option.some(dotyposCustomerFixture(customerId, fields));
 
 const group = (
   operator: "and" | "or",

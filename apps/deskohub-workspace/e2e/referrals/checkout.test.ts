@@ -10,13 +10,13 @@ import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifier
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { getReservationCustomerQueryMode } from "@/features/reservation/reservation-checkout-query";
 import { currencyCZK } from "@/shared/money/currencies";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { instantStringSchema } from "@/shared/utils/temporal";
+import { makeTestE2EConfig } from "../cases/e2e-fixtures.test-utils";
 import { makeCoworkCheckoutData } from "../checkout/data";
-import type { WorkspaceE2EConfig } from "../config";
 import { workspaceDir } from "../runtime";
 import {
   bindCheckoutContact,
@@ -86,10 +86,10 @@ test("opens a bound checkout on the signed-in account card, not for someone else
 });
 
 test("accepts only fresh signed pay URLs for the owned order and preview host", () => {
-  const config = {
-    baseUrl: "https://workspace.example.test",
-  } as WorkspaceE2EConfig;
-  const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+  const config = makeTestE2EConfig("https://workspace.example.test");
+  const orderId = workspaceReservationIdSchema.make(
+    "workspace-reservation-123"
+  );
   const initial =
     "https://workspace.example.test/en-US/checkout/pay?payState=first&orderId=workspace-reservation-123";
   const fresh =
@@ -135,9 +135,11 @@ test("accepts only fresh signed pay URLs for the owned order and preview host", 
 });
 
 test("both ownership guards accept and constrain URLs from the real fresh-pay builder", async () => {
-  const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+  const orderId = workspaceReservationIdSchema.make(
+    "workspace-reservation-123"
+  );
   const baseUrl = "https://workspace.example.test";
-  const config = { baseUrl } as WorkspaceE2EConfig;
+  const config = makeTestE2EConfig(baseUrl);
   const reservation = {
     kind: "cowork" as const,
     entryTier: "basic" as const,
@@ -319,7 +321,9 @@ test("both ownership guards accept and constrain URLs from the real fresh-pay bu
 
 test("accepts only the owned first pay page that reports the share-link referral", () => {
   const baseUrl = "https://workspace.example.test";
-  const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+  const orderId = workspaceReservationIdSchema.make(
+    "workspace-reservation-123"
+  );
   const payUrl = (query: string) =>
     `${baseUrl}/en-US/checkout/pay?payState=signed&orderId=${orderId}${query}`;
   const accepts = (currentUrl: string) =>
@@ -345,7 +349,9 @@ test("accepts only the owned first pay page that reports the share-link referral
 
 test("accepts only a rejected referral code on a re-signed pay state", () => {
   const baseUrl = "https://workspace.example.test";
-  const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+  const orderId = workspaceReservationIdSchema.make(
+    "workspace-reservation-123"
+  );
   const previousUrl = `${baseUrl}/en-US/checkout/pay?payState=signed&orderId=${orderId}`;
   const accepts = (currentUrl: string) =>
     isRejectedReferralCodeUrl({

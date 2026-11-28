@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "../account/config";
 import { makeCoworkCheckoutData } from "../checkout/data";
-import type { WorkspaceE2EEnvironment } from "../e2e-env";
-import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
+import { makeWorkspaceE2EEnvironment } from "../e2e-env";
+import { validE2ERuntimeEnvironment } from "../e2e-env.test-fixture";
 import { WorkspaceE2EError } from "../errors";
 import { workspaceE2EReferralCaseIds } from "../playwright-checkout/case-catalog";
 import { workspaceE2ERunIdSchema } from "../run-identifiers";
@@ -18,16 +18,15 @@ import { workspaceE2EReferralCheckoutCaseIds } from "./plan";
 const runId = workspaceE2ERunIdSchema.make("38258478033-1");
 const signingSecrets = "2:synthetic-current-session-signing-secret-0123456789";
 const environment = (secrets: string | undefined) =>
-  ({
-    ...makeTestE2EEnvironment({ WORKSPACE_E2E_BETTER_AUTH_SECRETS: secrets }),
-    WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL:
-      "postgresql://provider-permit:synthetic-password@ep-coordinator.eu.neon.tech/neondb",
-  }) as WorkspaceE2EEnvironment;
+  makeWorkspaceE2EEnvironment({
+    ...validE2ERuntimeEnvironment,
+    WORKSPACE_E2E_BETTER_AUTH_SECRETS: secrets,
+  });
 
 const plannedCase = (id: string): WorkspaceE2ECase => ({
-  checkoutStates: (
-    workspaceE2EReferralCheckoutCaseIds as readonly string[]
-  ).includes(id)
+  checkoutStates: workspaceE2EReferralCheckoutCaseIds.some(
+    (caseId) => caseId === id
+  )
     ? [
         {
           data: makeCoworkCheckoutData(

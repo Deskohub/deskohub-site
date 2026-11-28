@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type {
-  AutomationStepType as AutomationStep,
-  AutomationStepIdType as AutomationStepId,
-  AutomationWaitType as AutomationWait,
-  CalendarExpressionType as CalendarExpression,
-  InSavedAudienceType as InSavedAudience,
+import {
+  type AutomationStepType as AutomationStep,
+  AutomationStepId,
+  type AutomationWaitType as AutomationWait,
+  type CalendarExpressionType as CalendarExpression,
 } from "@deskohub/workspace-admin-api";
 import { Option } from "effect";
 import type { AudienceFilterOutcome } from "../audience-filter";
+import { campaignAudienceIdSchema } from "../campaign-identifiers";
 import {
   evaluateStep,
   type StepState,
@@ -23,14 +23,14 @@ const prague = (dateTime: string) =>
 /** An instant from a wall time with an explicit offset, for DST hours. */
 const offsetTime = (dateTime: string) => Temporal.Instant.from(dateTime);
 
-const stepId = "step" as AutomationStepId;
+const stepId = AutomationStepId.make("step");
 
 const conditionStep: AutomationStep = {
   _tag: "Condition",
   id: stepId,
   filter: {
     _tag: "InAudience",
-    audienceId: "audience" as InSavedAudience["audienceId"],
+    audienceId: campaignAudienceIdSchema.make("audience"),
     operator: "in",
   },
 };

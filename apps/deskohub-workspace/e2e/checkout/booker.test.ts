@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import type { Browser } from "@playwright/test";
 import { Effect } from "effect";
 import { rejectionOf } from "@/shared/testing/promise-outcome.test-utils";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "../account/config";
-import type { WorkspaceE2EEnvironment } from "../e2e-env";
-import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
+import { makeWorkspaceE2EEnvironment } from "../e2e-env";
+import { validE2ERuntimeEnvironment } from "../e2e-env.test-fixture";
 import { WorkspaceE2EError } from "../errors";
 import {
   isWorkspaceE2EReferralCaseId,
@@ -23,13 +22,10 @@ import { makeCoworkCheckoutData } from "./data";
 const runId = workspaceE2ERunIdSchema.make("38258478033-1");
 const signingSecrets = "2:synthetic-current-session-signing-secret-0123456789";
 const environment = (secrets: string | undefined) =>
-  ({
-    ...makeTestE2EEnvironment({ WORKSPACE_E2E_BETTER_AUTH_SECRETS: secrets }),
-    WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL:
-      "postgresql://provider-permit:synthetic-password@ep-coordinator.eu.neon.tech/neondb",
-  }) as WorkspaceE2EEnvironment;
-// The booker binder never touches the worker browser.
-const browser = {} as Browser;
+  makeWorkspaceE2EEnvironment({
+    ...validE2ERuntimeEnvironment,
+    WORKSPACE_E2E_BETTER_AUTH_SECRETS: secrets,
+  });
 
 const plannedCase = (id: string): WorkspaceE2ECase => ({
   checkoutStates: [
@@ -48,7 +44,6 @@ const plannedCase = (id: string): WorkspaceE2ECase => ({
 
 const bind = (id: string, secrets: string | undefined) =>
   bindWorkspaceE2ECheckoutBooker({
-    browser,
     environment: environment(secrets),
     runId,
     testCase: plannedCase(id),
@@ -100,7 +95,6 @@ test("leaves signed-out cases and cases with their own identities as planned", a
   for (const id of ["contact-form", "checkout-referral-someone-else"]) {
     const planned = plannedCase(id);
     const bound = await bindWorkspaceE2ECheckoutBooker({
-      browser,
       environment: environment(signingSecrets),
       runId,
       testCase: planned,
@@ -126,7 +120,6 @@ test("books the plain checkout as the booker's account", async () => {
 test("keeps the planned contact of a case that books for someone else", async () => {
   const planned = plannedCase("checkout-zero-total");
   const bound = await bindWorkspaceE2ECheckoutBooker({
-    browser,
     environment: environment(signingSecrets),
     runId,
     testCase: planned,

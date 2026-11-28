@@ -337,10 +337,16 @@ const shortTimeouts = {
   providerTransition: 5_000,
   uiTransition: 1_500,
 };
-const config = {
+const paymentConfig = (
+  paymentProvider: WorkspaceE2EConfig["paymentProvider"]
+): WorkspaceE2EConfig => ({
   baseUrl: server.url.origin,
+  bypassSecret: undefined,
+  expectedHost: server.url.host,
+  paymentProvider,
   timeouts: shortTimeouts,
-} as WorkspaceE2EConfig;
+});
+const config = paymentConfig("nexi");
 
 const dataFor = (scenario: string) => {
   const data = makeCoworkCheckoutData(
@@ -1056,22 +1062,30 @@ test.skipIf(!chromiumAvailable)(
           .use("observe delayed payment button", async (page) => {
             await page.evaluate(() => {
               setTimeout(() => {
-                const button = document.querySelector<HTMLButtonElement>(
-                  '[data-handler="pay"]'
-                );
-                if (button) button.disabled = false;
+                const button = document.querySelector('[data-handler="pay"]');
+                if (button instanceof HTMLButtonElement)
+                  button.disabled = false;
               }, 100);
             });
             await page.waitForTimeout(1_000);
-            afterDeadline = await page.evaluate(() => ({
-              activeElementId:
-                (document.activeElement as HTMLElement | null)?.id ?? "",
-              clickCount: (window as typeof window & { paymentClicks: number })
-                .paymentClicks,
-              focusCount: (
-                window as typeof window & { paymentButtonFocuses: number }
-              ).paymentButtonFocuses,
-            }));
+            afterDeadline = await page.evaluate(() => {
+              const clickCount: unknown = Reflect.get(window, "paymentClicks");
+              const focusCount: unknown = Reflect.get(
+                window,
+                "paymentButtonFocuses"
+              );
+              if (
+                typeof clickCount !== "number" ||
+                typeof focusCount !== "number"
+              ) {
+                throw new Error("Payment interaction counters are missing");
+              }
+              return {
+                activeElementId: document.activeElement?.id ?? "",
+                clickCount,
+                focusCount,
+              };
+            });
           })
           .pipe(Effect.asVoid),
     });
@@ -1159,7 +1173,7 @@ const runHostedCrossing = (scenario: string) => {
     drive: ({ session }) =>
       Effect.gen(function* () {
         const hosted = yield* submitPaymentAndWaitForHostedPage({
-          config: hostedCrossingConfig("nexi"),
+          config,
           session,
         });
         const activePage = yield* readActivePage(session);
@@ -1167,16 +1181,6 @@ const runHostedCrossing = (scenario: string) => {
       }),
   });
 };
-
-const hostedCrossingConfig = (
-  paymentProvider: WorkspaceE2EConfig["paymentProvider"]
-): WorkspaceE2EConfig => ({
-  baseUrl: server.url.origin,
-  bypassSecret: undefined,
-  expectedHost: server.url.host,
-  paymentProvider,
-  timeouts: shortTimeouts,
-});
 
 for (const [outcome, scenario] of [
   ["approved", "mock-hosted-same-tab"],
@@ -1186,7 +1190,7 @@ for (const [outcome, scenario] of [
     `submits a mock ${outcome} payment and returns to status`,
     async () => {
       const state = resetScenario(scenario);
-      const config = hostedCrossingConfig("mock");
+      const config = paymentConfig("mock");
       const result = await runBrowserStep({
         browser: requireBrowser(),
         prepare: showPayPage(scenario),
@@ -1257,7 +1261,7 @@ test.skipIf(!chromiumAvailable)(
         Effect.gen(function* () {
           const checkoutPage = yield* readActivePage(session);
           const hosted = yield* submitPaymentAndWaitForHostedPage({
-            config: hostedCrossingConfig("nexi"),
+            config,
             observeHandoffDocument: true,
             session: {
               ...session,
@@ -1351,7 +1355,7 @@ test.skipIf(!chromiumAvailable)(
       drive: ({ session }) =>
         Effect.gen(function* () {
           const hosted = yield* submitPaymentAndWaitForHostedPage({
-            config: hostedCrossingConfig("nexi"),
+            config,
             observeHandoffDocument: true,
             session,
           });
@@ -1399,7 +1403,7 @@ test.skipIf(!chromiumAvailable)(
       drive: ({ session }) =>
         Effect.gen(function* () {
           const hosted = yield* submitPaymentAndWaitForHostedPage({
-            config: hostedCrossingConfig("nexi"),
+            config,
             observeHandoffDocument: true,
             session,
           });

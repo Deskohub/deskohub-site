@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
-import type {
-  DotyposCustomerId,
-  DotyposReservationId,
+import {
+  DotyposCustomerIdSchema,
+  DotyposRejected,
+  type DotyposReservationId,
+  DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
-import { DotyposRejected } from "@deskohub/dotypos";
 import type { Customer } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
+import { workspaceReservationIdSchema } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
 import { Effect, Option } from "effect";
 import {
   emptyWorkspaceE2EAccountJournal,
@@ -16,19 +18,25 @@ import {
   validateWorkspaceE2EAccountLaneJournalOwnership,
 } from "../account/reconcile";
 import { WorkspaceE2EAccountResourceServiceMock } from "../account/resources.service.mock";
+import { hostedCheckoutRow } from "../cases/checkout.test-utils";
+import { unopenedE2EDatabase } from "../cases/e2e-fixtures.test-utils";
+import {
+  makeCoworkCheckoutData,
+  withCheckoutContactEmail,
+} from "../checkout/data";
 import {
   type PreparedCheckoutFlowCleanup,
   prepareCheckoutFlowCleanup,
 } from "../cleanup";
-import type { DatasourceConfig } from "../config";
+import { getDatasourceConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { workspaceE2EError } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
-import type { WorkspaceE2ERunId } from "../run-identifiers";
+import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import {
   type E2ETelemetryObservation,
   makeE2ETelemetryMock,
 } from "../services/telemetry.mock";
-import type { CheckoutData, CheckoutFlowState, CheckoutRow } from "../types";
+import type { CheckoutFlowState } from "../types";
 import {
   reconcileWorkspaceE2ECheckout,
   runWorkspaceE2ECleanupWithPreparedCandidates,
@@ -36,6 +44,8 @@ import {
 } from "./cleanup-plan";
 
 const sourceRunRecipientEmail = testEmailAddress("delivered+source-run-main");
+const sourceRunId = workspaceE2ERunIdSchema.make("source-run");
+const datasourceConfig = getDatasourceConfig(makeTestE2EEnvironment());
 
 test("records a failed suite-cleanup phase after reconciling the account lane", async () => {
   const observations: E2ETelemetryObservation[] = [];
@@ -163,8 +173,8 @@ test("rejects a present account profile without email before either cleanup scop
   const readCustomerIds: string[] = [];
 
   const accountPreparation = prepareWorkspaceE2EAccountLaneReconciliation(
-    {} as DatasourceConfig,
-    "source-run" as WorkspaceE2ERunId
+    datasourceConfig,
+    sourceRunId
   ).pipe(
     Effect.provide(
       WorkspaceE2EAccountResourceServiceMock({
@@ -193,10 +203,7 @@ test("rejects a present account profile without email before either cleanup scop
         Effect.runPromise(
           accountPreparation.pipe(
             Effect.map((prepared) => (prepared ? [prepared] : [])),
-            Effect.provideService(
-              E2EDatabase,
-              E2EDatabase.of({ db: {} as never })
-            )
+            Effect.provide(unopenedE2EDatabase)
           )
         ),
       readCheckoutCleanup: async () => emptyCheckoutCleanup(),
@@ -234,22 +241,12 @@ test("does not treat a present account reservation with a missing customer as ab
   );
   let mutationCount = 0;
   const accountPreparation = prepareWorkspaceE2EAccountLaneReconciliation(
-    {} as DatasourceConfig,
-    "source-run" as WorkspaceE2ERunId
+    datasourceConfig,
+    sourceRunId
   ).pipe(
     Effect.provide(
       WorkspaceE2EAccountResourceServiceMock({
         readAuthUserEmail: () => Effect.succeed(undefined),
-        readCustomerProfile: () =>
-          Effect.succeed(
-            Option.some({
-              _cloudId: "unused-cloud",
-              deleted: false,
-              display: true,
-              flags: "",
-              points: null,
-            } satisfies Customer)
-          ),
         readJournal: () => Effect.succeed(journal),
         readReservationOwner: () => Effect.fail(customerReadError),
       })
@@ -262,10 +259,7 @@ test("does not treat a present account reservation with a missing customer as ab
         Effect.runPromise(
           accountPreparation.pipe(
             Effect.map((prepared) => (prepared ? [prepared] : [])),
-            Effect.provideService(
-              E2EDatabase,
-              E2EDatabase.of({ db: {} as never })
-            )
+            Effect.provide(unopenedE2EDatabase)
           )
         ),
       readCheckoutCleanup: async () => emptyCheckoutCleanup(),
@@ -279,45 +273,55 @@ test("does not treat a present account reservation with a missing customer as ab
 });
 
 test("rejects an unrelated fallback owner before checkout or account mutation", async () => {
-  const exactOrderData = {
-    date: "2026-08-04",
-    email: testEmailAddress("delivered+source-checkout"),
-    expectedReservationDetails: {
-      kind: "cowork",
-      entryTier: "basic",
-      coffee: false,
-    },
-    locale: "en-US",
-  } as CheckoutData;
-  const fallbackData = {
-    ...exactOrderData,
-    email: testEmailAddress("delivered+fallback-checkout"),
-  };
+  const exactOrderData = withCheckoutContactEmail(
+    makeCoworkCheckoutData("https://workspace.example.test", "2026-08-04"),
+    testEmailAddress("delivered+source-checkout")
+  );
+  const fallbackData = withCheckoutContactEmail(
+    exactOrderData,
+    testEmailAddress("delivered+fallback-checkout")
+  );
+  const sourceOrderId = workspaceReservationIdSchema.make("source-order");
+  const sourceCustomerId = DotyposCustomerIdSchema.make("source-customer");
+  const foreignCustomerId = DotyposCustomerIdSchema.make("foreign-customer");
   const exactOrderState: CheckoutFlowState = {
     data: exactOrderData,
-    orderId: "source-order" as CheckoutFlowState["orderId"],
+    orderId: sourceOrderId,
     startedAt: new Date("2026-07-26T12:00:00.000Z"),
   };
   const fallbackState: CheckoutFlowState = {
     data: fallbackData,
     startedAt: new Date("2026-07-26T12:00:01.000Z"),
   };
-  const exactOrderRow = {
-    reservation_id: exactOrderState.orderId,
-    dotypos_customer_id: "source-customer" as DotyposCustomerId,
-    dotypos_reservation_id: "source-reservation" as DotyposReservationId,
-  } as CheckoutRow;
-  const unrelatedFallbackRow = {
-    reservation_id: "unrelated-order",
-    dotypos_customer_id: "foreign-customer" as DotyposCustomerId,
-    dotypos_reservation_id: "foreign-reservation" as DotyposReservationId,
-  } as CheckoutRow;
+  const exactOrderRow = hostedCheckoutRow(
+    "source-attempt",
+    "source-provider-order",
+    "nexi",
+    {
+      reservation_id: sourceOrderId,
+      dotypos_customer_id: sourceCustomerId,
+      dotypos_reservation_id:
+        DotyposReservationIdSchema.make("source-reservation"),
+    }
+  );
+  const unrelatedFallbackRow = hostedCheckoutRow(
+    "foreign-attempt",
+    "foreign-provider-order",
+    "nexi",
+    {
+      reservation_id: workspaceReservationIdSchema.make("unrelated-order"),
+      dotypos_customer_id: foreignCustomerId,
+      dotypos_reservation_id: DotyposReservationIdSchema.make(
+        "foreign-reservation"
+      ),
+    }
+  );
   let checkoutMutationCount = 0;
   let accountMutationCount = 0;
   let cancellationCount = 0;
   const checkoutPreparation = prepareCheckoutFlowCleanup(
     {
-      datasourceConfig: {} as DatasourceConfig,
+      datasourceConfig,
       flowStates: [exactOrderState, fallbackState],
     },
     {
@@ -333,11 +337,11 @@ test("rejects an unrelated fallback owner before checkout or account mutation", 
           Option.some(
             reservationId === exactOrderRow.dotypos_reservation_id
               ? {
-                  customerId: "source-customer" as DotyposCustomerId,
+                  customerId: sourceCustomerId,
                   email: exactOrderData.email,
                 }
               : {
-                  customerId: "foreign-customer" as DotyposCustomerId,
+                  customerId: foreignCustomerId,
                   email: testEmailAddress("delivered+other-run"),
                 }
           )
@@ -350,12 +354,7 @@ test("rejects an unrelated fallback owner before checkout or account mutation", 
       readAccountJournals: async () => [],
       readCheckoutCleanup: () =>
         Effect.runPromise(
-          checkoutPreparation.pipe(
-            Effect.provideService(
-              E2EDatabase,
-              E2EDatabase.of({ db: {} as never })
-            )
-          )
+          checkoutPreparation.pipe(Effect.provide(unopenedE2EDatabase))
         ),
       reconcile: async () => {
         checkoutMutationCount += 1;

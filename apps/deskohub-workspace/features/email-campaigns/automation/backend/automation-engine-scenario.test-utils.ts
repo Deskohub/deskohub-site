@@ -1,4 +1,5 @@
 import {
+  DotyposBranchIdSchema,
   DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
@@ -15,7 +16,16 @@ import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import { emailAutomationTickMinutes } from "@deskohub/workspace-admin-api";
 import { eq, sql } from "drizzle-orm";
-import { Deferred, Effect, Fiber, Layer, Option, Result, Struct } from "effect";
+import {
+  Array as Arr,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Result,
+  Struct,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
@@ -23,7 +33,10 @@ import {
   customerMarketingConsents,
   workspaceReservations,
 } from "@/db/schema";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
 import { ReservationActivitySweep } from "@/features/reservation/backend/reservation-activity-sweep.service";
@@ -40,6 +53,7 @@ import {
   type CancellationEventRetraction,
   retractCancellationEvent,
 } from "@/shared/backend/customer-events/customer-event-retraction";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type {
   WorkspacePostgresSuiteDatabase,
@@ -95,13 +109,16 @@ import { makeSweepPageHandler } from "./sweep-page";
 // ---------------------------------------------------------------------------
 // Dotypos
 
+const engineDotyposMethods = [
+  "getCustomersByIds",
+  "getReservationsByIds",
+  "listReservationsPage",
+  "listReservations",
+  "listActiveReservationsPage",
+] as const satisfies readonly DotyposOperation[];
+
 /** The Dotypos read operations the engine uses. */
-export type EngineDotyposMethod =
-  | "getCustomersByIds"
-  | "getReservationsByIds"
-  | "listReservationsPage"
-  | "listReservations"
-  | "listActiveReservationsPage";
+export type EngineDotyposMethod = (typeof engineDotyposMethods)[number];
 
 /** A failure a Dotypos read can return: a network error or an HTTP status. */
 export type EngineDotyposFailure = DotyposReadFailure;
@@ -115,18 +132,10 @@ export type EngineDotyposRequestHook = (request: {
   readonly ids?: readonly string[];
 }) => Effect.Effect<void, EngineDotyposFailure>;
 
-const engineDotyposMethods = [
-  "getCustomersByIds",
-  "getReservationsByIds",
-  "listReservationsPage",
-  "listReservations",
-  "listActiveReservationsPage",
-] as const satisfies readonly EngineDotyposMethod[];
-
 const isEngineDotyposMethod = (
   operation: DotyposOperation
 ): operation is EngineDotyposMethod =>
-  (engineDotyposMethods as readonly DotyposOperation[]).includes(operation);
+  engineDotyposMethods.some((method) => method === operation);
 
 /**
  * A Dotypos fake whose customers and visits tests change between
@@ -135,9 +144,13 @@ const isEngineDotyposMethod = (
  * test can gate, delay or fail requests.
  */
 export const makeEngineDotypos = () => {
-  const calls = Object.fromEntries(
-    engineDotyposMethods.map((method) => [method, 0])
-  ) as Record<EngineDotyposMethod, number>;
+  const calls = {
+    getCustomersByIds: 0,
+    getReservationsByIds: 0,
+    listReservationsPage: 0,
+    listReservations: 0,
+    listActiveReservationsPage: 0,
+  } satisfies Record<EngineDotyposMethod, number>;
   let hook: EngineDotyposRequestHook | undefined;
   const gates: Array<{
     readonly method: EngineDotyposMethod | "any";
@@ -255,19 +268,18 @@ export type EngineDotypos = ReturnType<typeof makeEngineDotypos>;
 export const engineProfile = (
   id: DotyposCustomerId,
   overrides: Partial<DotyposCustomer> = {}
-) =>
-  ({
-    id,
-    _cloudId: DotyposCloudIdSchema.make("automation-engine-cloud"),
-    firstName: "Test",
-    email: testEmailAddress(id.slice(-48)),
-    points: "0",
-    flags: "0",
-    display: true,
-    deleted: false,
-    tags: [],
-    ...overrides,
-  }) as DotyposCustomer;
+): DotyposCustomer => ({
+  id,
+  _cloudId: DotyposCloudIdSchema.make("automation-engine-cloud"),
+  firstName: "Test",
+  email: testEmailAddress(id.slice(-48)),
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+  tags: [],
+  ...overrides,
+});
 
 // ---------------------------------------------------------------------------
 // Resend
@@ -511,12 +523,12 @@ export const makeEngineFixtures = (
 ) => {
   const { db } = database;
   const created = {
-    reservations: [] as WorkspaceReservationId[],
-    events: [] as CustomerEventId[],
-    consents: [] as DotyposCustomerId[],
-    accounts: [] as CustomerAccountId[],
-    campaigns: [] as string[],
-    passes: [] as string[],
+    reservations: Arr.empty<WorkspaceReservationId>(),
+    events: Arr.empty<CustomerEventId>(),
+    consents: Arr.empty<DotyposCustomerId>(),
+    accounts: Arr.empty<CustomerAccountId>(),
+    campaigns: Arr.empty<string>(),
+    passes: Arr.empty<string>(),
   };
   const dotyposReservationId = (id: WorkspaceReservationId) =>
     DotyposReservationIdSchema.make(`${id}-dotypos`);
@@ -601,17 +613,24 @@ export const makeEngineFixtures = (
       readonly status?: "CONFIRMED" | "CANCELLED";
     }
   ) => {
-    const existing = dotypos.reservations.get(dotyposReservationId(id));
-    dotypos.reservations.set(dotyposReservationId(id), {
-      id: dotyposReservationId(id),
-      _branchId: "automation-entry-branch",
-      _cloudId: "automation-entry-cloud",
-      _customerId: visit.customer ?? existing?._customerId ?? "",
+    const reservationId = dotyposReservationId(id);
+    const existing = dotypos.reservations.get(reservationId);
+    const customer = visit.customer ?? existing?._customerId;
+    const reservation = {
+      id: reservationId,
+      _branchId: DotyposBranchIdSchema.make("automation-entry-branch"),
+      _cloudId: DotyposCloudIdSchema.make("automation-entry-cloud"),
       startDate: visit.startsAt.toString(),
       endDate: visit.endsAt.toString(),
       seats: "1",
       status: visit.status ?? "CONFIRMED",
-    } as DotyposReservation);
+    } satisfies DotyposReservation;
+    dotypos.reservations.set(
+      reservationId,
+      customer === undefined
+        ? reservation
+        : { ...reservation, _customerId: customer }
+    );
   };
 
   /** Cancels a visit in Dotypos only, keeping its times. */
@@ -732,8 +751,9 @@ export const makeEngineFixtures = (
   }) => {
     let customerAccountId: CustomerAccountId | null = null;
     if (input.kind === "account-created") {
-      customerAccountId =
-        `${prefix}-account-${created.accounts.length}` as CustomerAccountId;
+      customerAccountId = customerAccountIdSchema.make(
+        `${prefix}-account-${created.accounts.length}`
+      );
       created.accounts.push(customerAccountId);
       await Effect.runPromise(
         workspaceFixtures(db).customerAccount({
@@ -755,8 +775,9 @@ export const makeEngineFixtures = (
         })
         .returning({ id: customerEvents.id })
     );
-    created.events.push(event!.id);
-    return event!.id;
+    const { id } = requireValue(event, "inserted customer event");
+    created.events.push(id);
+    return id;
   };
 
   /**
@@ -1135,7 +1156,7 @@ export const makeAutomationEngineScenario = async (input: {
     /** Moves failed deliveries whose retry delay has passed back onto the queue. */
     const release = (at: Temporal.Instant) => {
       for (let index = 0; index < delayed.length; ) {
-        const entry = delayed[index]!;
+        const entry = requireValue(delayed[index], "delayed queue message");
         if (Temporal.Instant.compare(entry.availableAt, at) <= 0) {
           queue.redeliver(entry.message);
           delayed.splice(index, 1);
@@ -1385,7 +1406,10 @@ export const makeAutomationEngineScenario = async (input: {
            as pending`,
       [at.toString(), automationTickAtOrBefore(at).toString()]
     );
-    return rows[0]!.pending || queue.pending().length > 0;
+    return (
+      requireValue(rows[0], "pending-work query row").pending ||
+      queue.pending().length > 0
+    );
   };
 
   /**

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { CampaignBodyDocument } from "./campaign-body-document";
 import type { CampaignContent } from "./campaign-content";
 import { hashCampaignContent } from "./campaign-content-hash";
@@ -151,7 +152,7 @@ describe("hashCampaignContent", () => {
         locales: {
           ...content.locales,
           "cs-CZ": {
-            ...content.locales["cs-CZ"]!,
+            ...requireValue(content.locales["cs-CZ"], "cs-CZ content"),
             operationalReason: "Měníme provozní dobu.",
           },
         },

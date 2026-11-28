@@ -1,8 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
-import type { AutomationFlow } from "@deskohub/workspace-admin-api";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  type AutomationFlow,
+  AutomationStepId,
+} from "@deskohub/workspace-admin-api";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -13,10 +16,7 @@ import {
   seedAutomationVersion,
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
-import type {
-  AutomationStepId,
-  AutomationVersionId,
-} from "../automation-identifiers";
+import type { AutomationVersionId } from "../automation-identifiers";
 import { makeEngineDotypos } from "./automation-engine-scenario.test-utils";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 import {
@@ -31,12 +31,15 @@ afterAll(() => database?.close());
 const now = Temporal.Instant.from("2026-10-19T10:00:00Z");
 const prefix = `run-entry-${crypto.randomUUID()}`;
 
+const sendStep = AutomationStepId.make("send");
+
 const sendFlow: AutomationFlow = {
   trigger: { _tag: "Schedule", calendar: { minutes: [0], hours: [10] } },
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: sendStep }],
 };
 
-const customer = (name: string) => `${prefix}-${name}` as DotyposCustomerId;
+const customer = (name: string) =>
+  DotyposCustomerIdSchema.make(`${prefix}-${name}`);
 
 const occurrence = (
   name: string,

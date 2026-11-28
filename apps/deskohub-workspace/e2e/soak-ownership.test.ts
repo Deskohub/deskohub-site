@@ -47,7 +47,6 @@ test("the actual ownership reader requires complete case, owner, run and pre-cre
     await mkdir(join(directory, "account-journals"));
     await write("run-plan.json", {
       version: 2,
-      preparation: {},
       runContext: context,
     });
     for (const id of workspaceE2ECaseIds)

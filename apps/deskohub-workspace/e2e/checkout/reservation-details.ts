@@ -19,10 +19,13 @@ export const matchesExpectedReservationDetails = (
 ): boolean =>
   Option.match(decodeStoredReservationDetails(actual), {
     onNone: () => false,
-    onSome: (stored) =>
-      stored.kind === "cowork" || expected.kind === "cowork"
-        ? isDeepStrictEqual(stored, expected)
-        : Object.entries(expected).every(([key, value]) =>
-            isDeepStrictEqual(stored[key as keyof typeof stored], value)
-          ),
+    onSome: (stored) => {
+      if (stored.kind === "cowork" || expected.kind === "cowork") {
+        return isDeepStrictEqual(stored, expected);
+      }
+      const fields = new Map<string, unknown>(Object.entries(stored));
+      return Object.entries(expected).every(([key, value]) =>
+        isDeepStrictEqual(fields.get(key), value)
+      );
+    },
   });

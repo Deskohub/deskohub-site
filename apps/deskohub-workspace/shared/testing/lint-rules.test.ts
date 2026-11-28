@@ -970,14 +970,14 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["permits Workspace as const", "export const codes = [0, 2] as const;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
       ["permits Workspace const angle-bracket assertions", "export const codes = <const>[0, 2];\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
       ["rejects Workspace email campaign backend tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/backend/probe.postgres.test.ts"],
-      ["permits Workspace large-feature specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts"],
-      ["permits Workspace large-feature Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts"],
-      ["permits Workspace large-feature test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts"],
-      ["permits Workspace large-feature browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx"],
-      ["permits Workspace large-feature fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts"],
-      ["permits Workspace large-feature dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts"],
-      ["permits Workspace large-feature testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts"],
-      ["permits Workspace email campaign automation testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.ts"],
+      ["rejects Workspace email campaign specs", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts"],
+      ["rejects Workspace email campaign Playwright tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts"],
+      ["rejects Workspace email campaign test utilities", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts"],
+      ["rejects Workspace email campaign browser harnesses", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx"],
+      ["rejects Workspace email campaign fixtures", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts"],
+      ["rejects Workspace email campaign dotted fixtures", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts"],
+      ["rejects Workspace email campaign testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts"],
+      ["rejects Workspace email campaign automation testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.ts"],
       ["rejects Workspace shared testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/testing/probe.ts"],
       ["rejects Workspace shared tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
       ["rejects Workspace app tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/probe.test.tsx"],
@@ -1006,7 +1006,7 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace future-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
       ["rejects Workspace small-feature test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
       ["permits Workspace E2E non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
-      ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.test.ts"],
+      ["rejects Workspace email campaign test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/email-campaigns/probe.test.ts"],
     ],
   },
   {
@@ -1179,6 +1179,15 @@ const productionProbes = [
   "packages/standard-schema/src/probe.cts",
 ];
 const workspaceProductionProbes = [
+  "apps/deskohub-workspace/e2e/cases/probe.ts",
+  "apps/deskohub-workspace/e2e/cases/probe.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/checkout/probe.ts",
+  "apps/deskohub-workspace/e2e/checkout/probe.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.pw.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.test.ts",
+  "apps/deskohub-workspace/e2e/referrals/probe.ts",
+  "apps/deskohub-workspace/e2e/referrals/probe.test.ts",
   "apps/deskohub-workspace/app/api/probe/route.ts",
   "apps/deskohub-workspace/db/probe.ts",
   "apps/deskohub-workspace/emails/probe.tsx",
@@ -1191,8 +1200,7 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/probe.tsx",
   "apps/deskohub-workspace/probe.mts",
   "apps/deskohub-workspace/probe.cts",
-  // Only the listed suffixes right before the extension, and only testing,
-  // generated, and Paraglide directories, are exempt.
+  // Names containing e2e or test still get checked outside the exempt paths.
   "apps/deskohub-workspace/features/e2e/loader.mts",
   "apps/deskohub-workspace/shared/probe.test.config.cts",
   "apps/deskohub-workspace/probe with spaces.tsx",
@@ -1229,10 +1237,22 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/account/components/probe.test.tsx",
   "apps/deskohub-workspace/features/account/components/passkeys/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/email-campaigns/automation/probe.ts",
+  "apps/deskohub-workspace/features/email-campaigns/automation/probe.test.ts",
   "apps/deskohub-workspace/features/email-campaigns/admin/probe.test.tsx",
   "apps/deskohub-workspace/features/email-campaigns/admin/automation/builder/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/email-campaigns/backend/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/email-campaigns/backend/testing/probe.fixture.mts",
+  "apps/deskohub-workspace/features/email-campaigns/automation/backend/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.fixture.mts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.test.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx",
+  "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts",
+  "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
   "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/analytics/probe.postgres.test.ts",
@@ -1269,22 +1289,18 @@ const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
   "packages/standard-schema/generated/probe.cts",
 ];
-// Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
-  "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.fixture.mts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.test.ts",
+  "apps/deskohub-workspace/e2e/account/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.postgres.test.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx",
-  "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts",
-  "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts",
-  "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
+];
+const workspaceE2eAllowedProbes = [
+  "apps/deskohub-workspace/e2e/cases/allowed.test.ts",
+  "apps/deskohub-workspace/e2e/checkout/allowed.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/allowed.pw.ts",
+  "apps/deskohub-workspace/e2e/referrals/allowed.test.ts",
 ];
 
 const LintReport = Schema.Struct({
@@ -1384,6 +1400,18 @@ test.each([
     ]) {
       writeCase(productionFixture, probe, assertionProbe);
     }
+    for (const probe of workspaceE2eAllowedProbes) {
+      writeCase(
+        productionFixture,
+        probe,
+        [
+          'const defaults = ["fallback"] as const;',
+          "export const config = <const>{ enabled: true };",
+          "export const probe = (input?: string) => input ?? defaults[0];",
+          "",
+        ].join("\n")
+      );
+    }
     // The Workspace lint script resolves the root config through git.
     await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
     const packageManifest = readJsonFile(
@@ -1404,10 +1432,14 @@ test.each([
       productionRoot,
       await lintProduction(
         productionRoot,
-        "biome lint packages apps/deskohub-workspace"
+        "biome check packages apps/deskohub-workspace"
       ),
       [...productionProbes, ...workspaceProductionProbes],
-      [...generatedProbes, ...workspaceExemptProbes]
+      [
+        ...generatedProbes,
+        ...workspaceExemptProbes,
+        ...workspaceE2eAllowedProbes,
+      ]
     );
     expectAssertionDiagnostics(
       productionRoot,
@@ -1425,7 +1457,7 @@ test.each([
         workspaceManifest.scripts["lint:biome"]
       ),
       workspaceProductionProbes,
-      workspaceExemptProbes
+      [...workspaceExemptProbes, ...workspaceE2eAllowedProbes]
     );
   }
 );

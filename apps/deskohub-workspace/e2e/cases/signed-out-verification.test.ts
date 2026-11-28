@@ -9,6 +9,7 @@ import type { WorkspaceE2EConfig } from "../config";
 import { WorkspaceE2EError, workspaceE2EError } from "../errors";
 import { workspaceE2ETimeouts } from "../timeouts";
 import type { CheckoutFlowState } from "../types";
+import { unboundCaseServices } from "./e2e-fixtures.test-utils";
 import {
   assertSavedCheckoutProfile,
   getSignedOutContactPrompt,
@@ -58,11 +59,13 @@ test("plans the signed-out checkout on its own date and requires binding", async
   );
   const error = await Effect.runPromise(
     Effect.flip(
-      planned.execute({
-        openSeparateSession: () => unopenedBrowserSession,
-        openSession: unopenedBrowserSession,
-        runStep: (step) => step.execute,
-      }) as Effect.Effect<void, unknown>
+      planned
+        .execute({
+          openSeparateSession: () => unopenedBrowserSession,
+          openSession: unopenedBrowserSession,
+          runStep: (step) => step.execute,
+        })
+        .pipe(Effect.provide(unboundCaseServices))
     )
   );
   expect(error).toBeInstanceOf(WorkspaceE2EError);

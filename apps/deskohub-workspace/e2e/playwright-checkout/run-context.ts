@@ -1,8 +1,40 @@
 import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { Option, Schema } from "effect";
 import type { E2EEnvironment } from "../e2e-env";
+import {
+  githubActionsRunIdSchema,
+  workspaceE2ERunIdSchema,
+} from "../run-identifiers";
 import { workspaceDir, writeJsonAtomically } from "../runtime";
 import { type E2ERunContext, makeE2ERunContext } from "../services/telemetry";
+
+const positiveInteger = Schema.Int.check(Schema.isGreaterThan(0));
+
+export const workspaceE2ERunContextSchema = Schema.Struct({
+  allocation: Schema.Struct({
+    fromOffsetDays: Schema.Int,
+    shardCount: positiveInteger,
+    shardIndex: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    toOffsetDays: Schema.Int,
+  }).check(
+    Schema.makeFilter(
+      ({ fromOffsetDays, shardCount, shardIndex, toOffsetDays }) =>
+        shardIndex < shardCount && fromOffsetDays <= toOffsetDays
+    )
+  ),
+  executionContext: Schema.Literals(["ci", "manual"]),
+  githubRunAttempt: Schema.optionalKey(positiveInteger),
+  githubRunId: Schema.optionalKey(githubActionsRunIdSchema),
+  prNumber: Schema.optionalKey(positiveInteger),
+  runId: workspaceE2ERunIdSchema,
+  targetSha: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/))
+  ),
+});
+const decodeRunContext = Schema.decodeOption(
+  Schema.fromJsonString(workspaceE2ERunContextSchema)
+);
 
 const runContextPath = resolve(
   workspaceDir,
@@ -40,16 +72,8 @@ export const resolveWorkspaceE2ERunContext = (
 };
 
 const parseRunContext = (serialized: string): E2ERunContext => {
-  const value: unknown = JSON.parse(serialized);
-  if (
-    !isRecord(value) ||
-    typeof value.runId !== "string" ||
-    !isRecord(value.allocation)
-  ) {
-    throw new Error("Invalid workspace E2E run context");
-  }
-  return value as E2ERunContext;
+  return Option.getOrThrowWith(
+    decodeRunContext(serialized),
+    () => new Error("Invalid workspace E2E run context")
+  );
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;

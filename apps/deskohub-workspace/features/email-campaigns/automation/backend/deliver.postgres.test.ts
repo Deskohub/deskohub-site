@@ -15,6 +15,7 @@ import {
   getUnlimitedRenewalPath,
 } from "@/features/passes/routes";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { getWorkspaceCanonicalUrl } from "@/shared/utils/site-constants";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -277,7 +278,9 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       expect(request?.payload).toContain("Synthetic Holder");
       expect(request?.payload).toContain("List-Unsubscribe");
       expect(request?.payload).not.toContain("Generic automation copy");
-      const passId = passIds.find((id) => id === row.trigger_pass_id)!;
+      const passId = requireValue(
+        passIds.find((id) => id === row.trigger_pass_id)
+      );
       expect(request?.payload).toContain(
         getWorkspaceCanonicalUrl(getEntryPackBookingPath("en-US", passId))
       );
@@ -302,7 +305,9 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     await engine.drain(startedAt);
     const [request] = engine.resend.requests();
     expect(request?.payload).toContain(
-      getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
+      getWorkspaceCanonicalUrl(
+        getUnlimitedRenewalPath("en-US", requireValue(passId))
+      )
     );
     expect(request?.payload).not.toContain(deskLabel);
   });
@@ -320,7 +325,9 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     const [request] = engine.resend.requests();
     expect(request?.payload).toContain("Desk 14");
     expect(request?.payload).toContain(
-      getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
+      getWorkspaceCanonicalUrl(
+        getUnlimitedRenewalPath("en-US", requireValue(passId))
+      )
     );
   });
 
@@ -659,17 +666,25 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       [account]: ["ended", "sent", null],
       [outside]: ["ended", "skipped", "outside-test-domain"],
     });
-    expect(runs.get(booked)!.events).toEqual(["send-queued", "sent"]);
-    expect(runs.get(outside)!.events).toEqual(["send-queued", "skipped"]);
-    expect(runs.get(dotyposCancelled)!.events).toEqual(["withdrawn"]);
-    const deferred = runs.get(extended)!;
+    expect(requireValue(runs.get(booked)).events).toEqual([
+      "send-queued",
+      "sent",
+    ]);
+    expect(requireValue(runs.get(outside)).events).toEqual([
+      "send-queued",
+      "skipped",
+    ]);
+    expect(requireValue(runs.get(dotyposCancelled)).events).toEqual([
+      "withdrawn",
+    ]);
+    const deferred = requireValue(runs.get(extended));
     expect(deferred).toMatchObject({
       phase: "waiting",
       work_unit_id: null,
       send_id: null,
       events: ["deferred"],
     });
-    expect(new Date(deferred.due_at!).toISOString()).toBe(
+    expect(new Date(requireValue(deferred.due_at)).toISOString()).toBe(
       new Date(startedAt.add({ minutes: 15 }).epochMilliseconds).toISOString()
     );
     const {
@@ -689,7 +704,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     expect(unit).toMatchObject({ status: "done" });
     expect(engine.resend.requests()).toMatchObject([
       {
-        key: `email-campaign:${unit!.send_id}:attempt-1:batch-0`,
+        key: `email-campaign:${requireValue(unit).send_id}:attempt-1:batch-0`,
         to: expect.arrayContaining([
           testEmailAddress(booked),
           testEmailAddress(account),
@@ -701,7 +716,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       rows: [send],
     } = await pool.query(
       "select s.completed_at, s.automation_version_id, c.status from email_campaign_sends s join email_campaigns c on c.id = s.campaign_id where s.id = $1",
-      [unit!.send_id]
+      [requireValue(unit).send_id]
     );
     expect(send.completed_at).not.toBeNull();
     expect(send.automation_version_id).toBe(seeded.versionId);
@@ -818,7 +833,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       [restored]: ["ended", "withdrawn", null],
       [cancelledAgain]: ["ended", "withdrawn", null],
     });
-    expect(runs.get(startedLater)!.events).toEqual(["deferred"]);
+    expect(requireValue(runs.get(startedLater)).events).toEqual(["deferred"]);
   });
 
   test("a refused first request ends the runs failed / delivery-refused", async () => {
@@ -978,7 +993,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       engine.resend.respondWith(() => "accept");
       const [killed] = await unitsOf(seeded.campaignId);
       expect(killed).toMatchObject({ status: "claimed" });
-      expect(killed!.send_id).not.toBeNull();
+      expect(requireValue(killed).send_id).not.toBeNull();
       const verified = engine.dotypos.calls.getReservationsByIds;
       expect(verified).toBe(1);
 
@@ -1028,7 +1043,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
         rows: [settled],
       } = await pool.query(
         "select c.status, s.completed_at from email_campaign_sends s join email_campaigns c on c.id = s.campaign_id where s.id = $1",
-        [killed!.send_id]
+        [requireValue(killed).send_id]
       );
       expect(settled.status).toBe(
         {
@@ -1040,7 +1055,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       );
       expect(settled.completed_at).not.toBeNull();
       const keys = engine.resend.requests().map(({ key }) => key);
-      const killedKey = `email-campaign:${killed!.send_id}:attempt-1:batch-0`;
+      const killedKey = `email-campaign:${requireValue(killed).send_id}:attempt-1:batch-0`;
       expect(keys.filter((key) => key === killedKey)).toHaveLength(2);
       // One email per recipient, even when the provider had accepted it.
       expect(engine.resend.mailed().sort()).toEqual(

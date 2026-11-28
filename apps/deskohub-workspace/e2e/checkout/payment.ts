@@ -48,6 +48,7 @@ import {
   type ReservationFormPreparation,
   type ReservationPreparationState,
   readReservationPreparationState,
+  reservationPreparationStateSchema,
 } from "./reservation-form-preparation";
 
 const reservationStartRetryableErrorMessages = [
@@ -65,6 +66,9 @@ const reservationPreparationStateKey = "__deskohubWorkspaceE2EPreparation";
 const pageReadTimeoutMs = 30_000;
 const decodeWorkspaceReservationId = Schema.decodeUnknownSync(
   workspaceReservationIdSchema
+);
+const isReservationPreparationState = Schema.is(
+  reservationPreparationStateSchema
 );
 
 export const prepareCheckoutPaymentAttempt = ({
@@ -414,14 +418,11 @@ const readPreparationState = (
         tryWorkspaceE2ESync(
           "parse checkout reservation preparation state",
           () => {
-            const state = value as Partial<ReservationPreparationState>;
             assert(
-              state.status === "pending" ||
-                state.status === "ready" ||
-                (state.status === "failed" && typeof state.error === "string"),
+              isReservationPreparationState(value),
               "checkout reservation preparation state invalid"
             );
-            return state as ReservationPreparationState;
+            return value;
           }
         )
       )

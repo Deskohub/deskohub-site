@@ -3,10 +3,10 @@ import {
   type AutomationStepType as AutomationStep,
   AutomationStepId,
   type AutomationWaitType as AutomationWait,
-  type InSavedAudienceType as InSavedAudience,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Option } from "effect";
 import type { AudienceFilterOutcome } from "../audience-filter";
+import { campaignAudienceIdSchema } from "../campaign-identifiers";
 import {
   noSendPolicyFacts,
   type ReplayedEvent,
@@ -27,7 +27,7 @@ const condition = (id: string): AutomationStep => ({
   id: AutomationStepId.make(id),
   filter: {
     _tag: "InAudience",
-    audienceId: "audience" as InSavedAudience["audienceId"],
+    audienceId: campaignAudienceIdSchema.make("audience"),
     operator: "in",
   },
 });

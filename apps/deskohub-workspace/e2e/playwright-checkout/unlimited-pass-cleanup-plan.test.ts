@@ -163,6 +163,7 @@ test("only a valid empty Unlimited case journal proves an existing account never
     { ...emptyJournal, caseId: "locale-switch" },
     { ...emptyJournal, checkoutStates: [{ data: {} }] },
     { ...emptyJournal, reservationIntents: undefined },
+    { ...emptyJournal, startedAt: "invalid date" },
     { ...emptyJournal, version: 1 },
   ]) {
     expect(() =>

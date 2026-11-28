@@ -3,7 +3,7 @@ import "@/shared/polyfills/temporal";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { type Browser, chromium, type Page } from "@playwright/test";
-import { Effect } from "effect";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import type { E2EBrowserSession } from "../browser-session";
 import {
@@ -11,16 +11,13 @@ import {
   failedStepAnnotation,
   runBrowserStep,
 } from "../case-runner.browser.test-utils";
-import type { WorkspaceE2EConfig } from "../config";
-import { E2EDatabase } from "../integrations/database.service";
-import { workspaceE2ETimeouts } from "../timeouts";
-import type { CheckoutData, CheckoutRow } from "../types";
 import {
   assertFulfilledStatusPage,
   findFulfilledStatusPageProblem,
   findFulfillmentSupportLinkProblem,
   isFreshReservationFormSettled,
 } from "./checkout";
+import { makeTestE2EConfig } from "./e2e-fixtures.test-utils";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 let browser: Browser | undefined;
@@ -187,26 +184,22 @@ const assertStatusPage = (
       amount_exponent: 2,
       amount_value: 0,
       currency: "CZK",
-    } as CheckoutRow,
-    config: {
-      expectedHost: server.url.host,
-      paymentProvider: "nexi",
-      timeouts: workspaceE2ETimeouts,
-    } as WorkspaceE2EConfig,
+    },
+    config: makeTestE2EConfig(server.url.origin),
     data: {
       locale: "en-US",
-      ...(office ? { office: { seats: office.seats } } : { meetingRoom: {} }),
-    } as CheckoutData,
+      ...(office
+        ? { office: { seats: office.seats } }
+        : { meetingRoom: { duration: { unit: "hour", amount: 4 } } }),
+    },
     expectedOfficeInvitees: office?.invitees,
     dotyposReservation: {
       reservedFrom: Temporal.Instant.from("2026-08-25T08:00:00Z"),
       reservedUntil: Temporal.Instant.from("2026-08-25T12:00:00Z"),
-    } as never,
+    },
     openSession,
-    orderId: "order-id" as CheckoutRow["reservation_id"],
-  }).pipe(
-    Effect.provideService(E2EDatabase, E2EDatabase.of({ db: {} as never }))
-  );
+    orderId: workspaceReservationIdSchema.make("order-id"),
+  });
 
 const openStatusPage = (extra: string) => {
   pages.set(statusPath, statusPage(extra));

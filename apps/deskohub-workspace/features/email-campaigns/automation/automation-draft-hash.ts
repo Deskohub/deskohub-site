@@ -44,7 +44,9 @@ export type AutomationPublishableCopy = Pick<
  * hash by id, so editing that audience changes nothing.
  */
 export function hashAutomationDraft(
-  copy: AutomationPublishableCopy
+  copy: Omit<AutomationPublishableCopy, "templateKey"> & {
+    readonly templateKey: string;
+  }
 ): AutomationDraftHash {
   const content =
     copy.emailVersionId != null

@@ -1,11 +1,11 @@
-import type {
-  DotyposCustomerId,
-  DotyposReservation,
-  DotyposReservationId,
+import {
+  DotyposCustomerIdSchema,
+  type DotyposReservation,
+  type DotyposReservationId,
 } from "@deskohub/dotypos";
 import { Data, Schema } from "effect";
 import type { WorkspaceReservationRow } from "@/db/schema/workspace-reservations";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import {
   hasUnlimitedPassDayMarker,
@@ -51,8 +51,7 @@ export const readUnlimitedPassCleanupIntent = ({
   const envelope = parseWorkspaceE2ECaseJournal(journal);
   if (
     envelope.caseId !== unlimitedPassAutoRenewalCaseId ||
-    envelope.checkoutStates.length !== 0 ||
-    !Number.isFinite(Date.parse(envelope.startedAt))
+    envelope.checkoutStates.length !== 0
   ) {
     throw invalidJournal();
   }
@@ -112,8 +111,8 @@ export const readUnlimitedPassCleanupIntent = ({
     throw invalidJournal();
   }
   return {
-    accountId: authUserId as CustomerAccountId,
-    customerId: dotyposCustomerId as DotyposCustomerId,
+    accountId: customerAccountIdSchema.make(authUserId),
+    customerId: DotyposCustomerIdSchema.make(dotyposCustomerId),
     endsBefore,
     firstDay,
     interval,

@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { emailCampaignAutomationWorkUnits } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { WorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AutomationWorkUnitStatus } from "../automation-work-units";
 import { automationWorkUnitPriorities } from "../automation-work-units";
@@ -189,5 +190,5 @@ export const seedAutomationUnit = (
       ...(input.createdAt && { createdAt: input.createdAt }),
     })
     .returning()
-    .pipe(Effect.map(([unit]) => unit!));
+    .pipe(Effect.map(([unit]) => requireValue(unit, "inserted work unit")));
 };
