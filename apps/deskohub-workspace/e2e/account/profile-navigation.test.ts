@@ -4,7 +4,10 @@ import { parsePhoneNumber } from "@deskohub/phone-number";
 import { chromium, errors } from "@playwright/test";
 import { Option } from "effect";
 import { baseLocale, defaultPhoneRegion } from "@/features/i18n";
-import type { AccountSection } from "../../features/account/sections";
+import {
+  type AccountSection,
+  accountSectionLabel,
+} from "../../features/account/sections";
 import { playwrightChromiumAvailable } from "../../shared/testing/playwright-browser";
 import {
   isWorkspaceE2EDiagnosticCode,
@@ -12,7 +15,11 @@ import {
   type WorkspaceE2EProfileNavigationDiagnosticCode,
 } from "../errors";
 import { formatWorkspaceE2EFailureAnnotation } from "../github-actions";
-import { accountSectionLandmarks } from "./account-sections";
+import {
+  type AccountSectionNavigationPage,
+  accountSectionLandmarks,
+  selectAccountSection,
+} from "./account-sections";
 import {
   type ProfileNavigationBrowser,
   triggerProfileHistoryBack,
@@ -205,6 +212,37 @@ const makeProfileNavigationBrowser = (
     },
   });
 
+  const sectionPage: AccountSectionNavigationPage = {
+    getSectionLink: (label) => {
+      const section = (["profile", "billing"] as const).find(
+        (candidate) => accountSectionLabel(candidate, "en-US") === label
+      );
+      if (section === undefined)
+        throw new Error(`unexpected section: ${label}`);
+      return {
+        click: async () => switchSection(section),
+        waitForHandler: async () => {
+          if (
+            documentReloaded &&
+            failurePhase === "profile-handler-wait" &&
+            section === "profile"
+          ) {
+            throw new errors.TimeoutError(privateFailureDetails);
+          }
+        },
+      };
+    },
+    viewportSize: () => ({ height: 900, width: 1440 }),
+    waitForFunction: async (
+      _predicate: unknown,
+      target: string | { readonly section: AccountSection }
+    ) => {
+      if (typeof target !== "string" && target.section !== state.section) {
+        throw new Error("profile fixture did not select the requested section");
+      }
+    },
+  };
+
   return {
     locator: makeLocator,
     headerLink: (name) => {
@@ -213,20 +251,8 @@ const makeProfileNavigationBrowser = (
       throw new Error(`unsupported banner link: ${name}`);
     },
     heading: (name) => makeLocator(`heading:${name}`),
-    selectSection: async (section, onStage) => {
-      onStage("link-handler-wait");
-      if (
-        documentReloaded &&
-        failurePhase === "profile-handler-wait" &&
-        section === "profile"
-      ) {
-        throw new errors.TimeoutError(privateFailureDetails);
-      }
-      onStage("panel-hydration-wait");
-      onStage("native-link-click");
-      switchSection(section);
-      onStage("selected-landmark-wait");
-    },
+    selectSection: (section, onStage) =>
+      selectAccountSection(sectionPage, section, onStage),
     billingCompanyValidationMessage: async () => "Please fill out this field.",
     historyBack: () => requestDialog("history-back"),
     waitForDialog: () => {

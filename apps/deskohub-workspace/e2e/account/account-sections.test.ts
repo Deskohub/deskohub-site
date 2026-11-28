@@ -8,6 +8,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { requireHydratedAccountLink } from "./account-link.test-utils";
 import {
   type AccountSectionNavigationPage,
   accountSectionLandmarks,
@@ -159,21 +160,7 @@ const fakeLocator = (element: Element, width: number | null) => ({
       throw new Error("fake target is hidden");
     fireEvent.click(element);
   },
-  waitForHandler: async () => {
-    const key = Object.keys(element).find((part) =>
-      part.startsWith("__reactProps$")
-    );
-    const props: unknown =
-      key === undefined ? undefined : Reflect.get(element, key);
-    if (
-      typeof props !== "object" ||
-      props === null ||
-      !("onClick" in props) ||
-      typeof props.onClick !== "function"
-    ) {
-      throw new Error("fake link was not hydrated");
-    }
-  },
+  waitForHandler: async () => requireHydratedAccountLink(element),
 });
 
 const makeFakePage = (width: number | null): AccountSectionNavigationPage => ({

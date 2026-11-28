@@ -18,6 +18,7 @@ import {
   runAccountLayoutNavigationPhase,
   verifyAccountLayoutNavigation,
 } from "./account-layout-navigation";
+import { requireHydratedAccountLink } from "./account-link.test-utils";
 
 mock.module("next/navigation", () => ({
   useRouter: () => ({ refresh: () => undefined }),
@@ -201,21 +202,7 @@ const fakeLocator = (element: Element) => ({
     if (!elementIsVisible(element)) throw new Error("fake target is hidden");
     fireEvent.click(element);
   },
-  waitForHandler: async () => {
-    const key = Object.keys(element).find((part) =>
-      part.startsWith("__reactProps$")
-    );
-    const props: unknown =
-      key === undefined ? undefined : Reflect.get(element, key);
-    if (
-      typeof props !== "object" ||
-      props === null ||
-      !("onClick" in props) ||
-      typeof props.onClick !== "function"
-    ) {
-      throw new Error("fake link was not hydrated");
-    }
-  },
+  waitForHandler: async () => requireHydratedAccountLink(element),
   waitFor: async (waitOptions?: Parameters<Locator["waitFor"]>[0]) => {
     if (waitOptions?.state === "visible" && !elementIsVisible(element))
       throw new Error("fake target did not become visible");

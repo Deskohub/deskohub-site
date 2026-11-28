@@ -340,20 +340,25 @@ export const withCallbackHandoffReview = (
   page: Playwright.Page,
   destination: AccountReviewDestination,
   runCase: () => Promise<void>,
-  expectation: CallbackHandoffExpectation = accountCallbackHandoff
+  expectation?: CallbackHandoffExpectation
 ): Promise<void> =>
-  reviewCallbackHandoff(page, destination, runCase, expectation, (...args) =>
-    prepareCallbackDocumentReview(
-      {
-        url: () => page.url(),
-        viewportSize: () => page.viewportSize(),
-        setViewportSize: (size) => page.setViewportSize(size),
-        addInitScript: (source) => page.addInitScript(source),
-        openSession: () => page.context().newCDPSession(page),
-        holdsVirtualAuthenticator: () => holdsVirtualAuthenticator(page),
-      },
-      ...args
-    )
+  reviewCallbackHandoff(
+    page,
+    destination,
+    runCase,
+    (...args) =>
+      prepareCallbackDocumentReview(
+        {
+          url: () => page.url(),
+          viewportSize: () => page.viewportSize(),
+          setViewportSize: (size) => page.setViewportSize(size),
+          addInitScript: (source) => page.addInitScript(source),
+          openSession: () => page.context().newCDPSession(page),
+          holdsVirtualAuthenticator: () => holdsVirtualAuthenticator(page),
+        },
+        ...args
+      ),
+    expectation
   );
 
 export const reviewCallbackHandoff = async <
@@ -362,8 +367,8 @@ export const reviewCallbackHandoff = async <
   page: CallbackHandoffPage<Locator>,
   destination: AccountReviewDestination,
   runCase: () => Promise<void>,
-  expectation: CallbackHandoffExpectation,
-  prepareDocumentReview: PrepareDocumentReview
+  prepareDocumentReview: PrepareDocumentReview,
+  expectation: CallbackHandoffExpectation = accountCallbackHandoff
 ): Promise<void> => {
   const { baseUrl, screenshots: captureEnabled } = destination;
   const { returnTo, reviewTarget } = expectation;

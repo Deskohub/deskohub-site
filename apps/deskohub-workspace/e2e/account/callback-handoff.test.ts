@@ -105,7 +105,7 @@ const documentReviewControl: {
 
 type HandoffPage = CallbackHandoffPage<CallbackHandoffLocator>;
 type DestinationRouteHandler = Parameters<HandoffPage["route"]>[1];
-type PrepareDocumentReview = Parameters<typeof reviewCallbackHandoff>[4];
+type PrepareDocumentReview = Parameters<typeof reviewCallbackHandoff>[3];
 
 const prepareDocumentForFakePage =
   (page: HandoffPage): PrepareDocumentReview =>
@@ -144,14 +144,14 @@ const runHandoffReview = (
   page: HandoffPage,
   destination: AccountReviewDestination,
   runCase: () => Promise<void>,
-  expectation = accountCallbackHandoff
+  expectation?: Parameters<typeof reviewCallbackHandoff>[4]
 ) =>
   reviewCallbackHandoff(
     page,
     destination,
     runCase,
-    expectation,
-    prepareDocumentForFakePage(page)
+    prepareDocumentForFakePage(page),
+    expectation
   );
 
 type CallbackFakePageOptions = {
