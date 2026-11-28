@@ -439,6 +439,21 @@ describe("flow selection planning", () => {
       navigationSpecs: ["temporal-runtime.pw.ts"],
     });
 
+    const tableOnly = resolveWorkspaceE2EFlowSelection("checkout-table");
+    expect(needsWorkspaceE2ECheckoutPreparation(tableOnly)).toBe(true);
+    expect(selectedWorkspaceE2ECheckoutProjects(tableOnly)).toEqual([
+      "checkout-cases",
+    ]);
+    expect(isWorkspaceE2ECaseSelected("checkout-table-paid", tableOnly)).toBe(
+      true
+    );
+    expect(
+      isWorkspaceE2ECaseSelected("reservation-url-state-table", tableOnly)
+    ).toBe(true);
+    expect(
+      isWorkspaceE2ECaseSelected("checkout-office-paid-multi-day", tableOnly)
+    ).toBe(false);
+
     const none = resolveWorkspaceE2EFlowSelection("none");
     expect(selectedWorkspaceE2ECheckoutProjects(none)).toEqual([]);
     expect(selectedWorkspaceE2EInstantNavigationPlan(none)).toEqual({

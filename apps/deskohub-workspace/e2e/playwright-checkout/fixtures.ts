@@ -4,6 +4,7 @@ import { isWorkspaceE2ECaseSelected } from "../flows";
 import {
   isWorkspaceE2ENightlyCaseId,
   isWorkspaceE2EOfficeCaseId,
+  isWorkspaceE2ETableCaseId,
   unlimitedPassAutoRenewalCaseId,
   type WorkspaceE2ECaseId,
 } from "./case-catalog";
@@ -125,6 +126,10 @@ export const registerWorkspaceE2ECases = (
           test.skip(
             isWorkspaceE2EOfficeCaseId(caseId),
             "The office page is disabled in this preview"
+          );
+          test.skip(
+            isWorkspaceE2ETableCaseId(caseId),
+            "The Team Table page is disabled in this preview"
           );
           throw new Error(`Workspace E2E case ${caseId} was not constructed`);
         }

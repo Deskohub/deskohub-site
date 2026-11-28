@@ -6,6 +6,7 @@ import { makeWorkspaceE2ECases } from "../cases";
 import { prepareDiscountAvailabilityE2E } from "../cases/discounts";
 import { prepareMeetingRoomE2E } from "../cases/meeting-room";
 import { prepareOfficeE2E } from "../cases/office";
+import { prepareTableE2E } from "../cases/table";
 import { assertNexiSandbox, getConfig, getDatasourceConfig } from "../config";
 import {
   prepareWorkspaceE2EHostedPaymentPermitQueue,
@@ -27,6 +28,7 @@ import { assertSafeDatabaseUrl } from "../runtime";
 import { E2ETelemetryService } from "../services/telemetry";
 import {
   isWorkspaceE2EOfficeCaseId,
+  isWorkspaceE2ETableCaseId,
   unlimitedPassAutoRenewalCaseId,
   workspaceE2ECaseIds,
 } from "./case-catalog";
@@ -123,6 +125,14 @@ test("prepare the workspace checkout run", async ({ browser }) => {
                       effect: prepareOfficeE2E(config, runContext.allocation),
                       phaseId: "office-availability-preparation",
                     }),
+                    table: telemetry.tracePhase({
+                      effect: prepareTableE2E(
+                        config,
+                        datasourceConfig,
+                        runContext.allocation
+                      ),
+                      phaseId: "table-availability-preparation",
+                    }),
                   },
                   { concurrency: "unbounded" }
                 )
@@ -169,7 +179,9 @@ test("prepare the workspace checkout run", async ({ browser }) => {
       (caseId) =>
         caseId !== unlimitedPassAutoRenewalCaseId &&
         (preparationResult.preparation.office !== undefined ||
-          !isWorkspaceE2EOfficeCaseId(caseId))
+          !isWorkspaceE2EOfficeCaseId(caseId)) &&
+        (preparationResult.preparation.table !== undefined ||
+          !isWorkspaceE2ETableCaseId(caseId))
     );
     expect(preparationResult.actualCaseIds).toEqual(
       [...expectedCaseIds].toSorted()

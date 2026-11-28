@@ -9,6 +9,7 @@ import {
   isWorkspaceE2EReferralCaseId,
   workspaceE2ECaseIds,
 } from "../playwright-checkout/case-catalog";
+import { bindCheckoutContact } from "../referrals/checkout";
 import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import type { WorkspaceE2ECase } from "../types";
 import {
@@ -51,6 +52,7 @@ const bind = (id: string, secrets: string | undefined) =>
 
 test("signs in every submitting case that does not own its identities", () => {
   expect(workspaceE2ECheckoutBookerCaseIds).toContain("checkout-cowork-basic");
+  expect(workspaceE2ECheckoutBookerCaseIds).toContain("checkout-table-paid");
   expect(workspaceE2ECheckoutBookerCaseIds).toContain(
     "payment-meeting-room-cancelled"
   );
@@ -59,6 +61,7 @@ test("signs in every submitting case that does not own its identities", () => {
     "locale-switch",
     "locale-smoke-de-de",
     "reservation-url-state-cowork",
+    "reservation-url-state-table",
     "checkout-referral-someone-else",
     "checkout-signed-out-verification",
   ]) {
@@ -126,6 +129,45 @@ test("keeps the planned contact of a case that books for someone else", async ()
   });
 
   expect(bound.checkoutStates).toBe(planned.checkoutStates);
+  expect(bound.execute).not.toBe(planned.execute);
+});
+
+test("binds the booker's account contact for cases that opt into account booking", async () => {
+  const initialData = makeCoworkCheckoutData(
+    "https://deskohub-workspace-abc123xyz-deskohub.vercel.app",
+    "2099-09-01",
+    "checkout-table-paid"
+  );
+  const planned: WorkspaceE2ECase = {
+    bindAccountContact: (contact) => {
+      const boundData = bindCheckoutContact(initialData, contact);
+      return {
+        checkoutStates: [{ data: boundData }],
+        execute: () => Effect.void,
+        id: "checkout-table-paid",
+        timeoutMs: 1_000,
+      };
+    },
+    checkoutStates: [{ data: initialData }],
+    execute: () => Effect.void,
+    id: "checkout-table-paid",
+    timeoutMs: 1_000,
+  };
+  const bound = await bindWorkspaceE2ECheckoutBooker({
+    environment: environment(signingSecrets),
+    runId,
+    testCase: planned,
+  });
+  const [state] = bound.checkoutStates;
+  const booker = makeWorkspaceE2EAccountRecipientForRunId(
+    runId,
+    workspaceE2ECheckoutBookerLabel("checkout-table-paid")
+  );
+
+  expect(state?.data.email).toBe(booker);
+  const url = new URL(state?.data.checkoutUrl ?? "");
+  expect(url.searchParams.get("customer")).toBe("account");
+  expect(url.searchParams.get("email")).toBe(booker);
   expect(bound.execute).not.toBe(planned.execute);
 });
 

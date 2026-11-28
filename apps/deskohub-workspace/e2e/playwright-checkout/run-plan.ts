@@ -11,6 +11,7 @@ import { storedCoworkReservationDetailsSchema } from "@/features/reservation/cow
 import { storedMeetingRoomReservationDetailsSchema } from "@/features/reservation/meeting-room-reservation";
 import { meetingRoomReservationDurationSchema } from "@/features/reservation/meeting-room-reservation-duration";
 import { storedOfficeReservationDetailsSchema } from "@/features/reservation/office-reservation";
+import { storedTableReservationDetailsSchema } from "@/features/reservation/table-reservation";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import type { WorkspaceE2EPreparation } from "../cases";
 import { writeReservationJournal } from "../reservation-journal";
@@ -46,6 +47,15 @@ const officeSlotSchema = Schema.Struct({
   startsOn: Schema.String,
 });
 
+const tableSlotSchema = Schema.Struct({
+  date: Schema.String,
+  endsAt: instantStringSchema,
+  endTime: Schema.String,
+  seats: Schema.Int,
+  startsAt: instantStringSchema,
+  startTime: Schema.String,
+});
+
 const preparationSchema = Schema.Struct({
   customerDiscountGroup: Schema.Struct({
     basisPoints: Schema.Int,
@@ -64,6 +74,13 @@ const preparationSchema = Schema.Struct({
   office: Schema.UndefinedOr(
     Schema.Struct({ slot: officeSlotSchema, urlStateSlot: officeSlotSchema })
   ).pipe(Schema.withDecodingDefaultKey(Effect.undefined)),
+  table: Schema.UndefinedOr(
+    Schema.Struct({
+      exclusiveForSingleTable: Schema.optionalKey(Schema.Boolean),
+      slot: tableSlotSchema,
+      urlStateSlot: tableSlotSchema,
+    })
+  ).pipe(Schema.withDecodingDefaultKey(Effect.undefined)),
 });
 
 const checkoutDataSchema = Schema.Struct({
@@ -74,6 +91,7 @@ const checkoutDataSchema = Schema.Struct({
     storedCoworkReservationDetailsSchema,
     storedMeetingRoomReservationDetailsSchema,
     storedOfficeReservationDetailsSchema,
+    storedTableReservationDetailsSchema,
   ]),
   locale: Schema.Literals(supportedLocales),
   meetingRoom: Schema.optionalKey(meetingRoomDetailsSchema),
@@ -81,6 +99,12 @@ const checkoutDataSchema = Schema.Struct({
   office: Schema.optionalKey(officeSlotSchema),
   orderIdHint: Schema.String,
   phone: Schema.String,
+  table: Schema.optionalKey(
+    Schema.Struct({
+      ...tableSlotSchema.fields,
+      checkoutInvitees: Schema.Array(Schema.String),
+    })
+  ),
 });
 
 const runPlanSchema = Schema.Struct({

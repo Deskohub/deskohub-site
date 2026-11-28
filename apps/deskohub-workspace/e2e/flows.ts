@@ -19,6 +19,7 @@ export const workspaceE2EFlowIds = [
   "checkout-cowork",
   "checkout-meeting-room",
   "checkout-office",
+  "checkout-table",
   "payments",
   "discounts",
   "referrals",
@@ -85,6 +86,7 @@ export const workspaceE2ECaseFlowById = {
   "reservation-url-state-office-starts-on-link": "checkout-office",
   "referral-profile-completion-unusable-link": "referrals",
   "reservation-url-state-office": "checkout-office",
+  "reservation-url-state-table": "checkout-table",
   "reservation-url-state-meeting-room": "checkout-meeting-room",
   "contact-form": "public-site",
   "checkout-calendar-sale": "discounts",
@@ -97,6 +99,7 @@ export const workspaceE2ECaseFlowById = {
   "checkout-cowork-basic": "checkout-cowork",
   "checkout-all-discounts": "discounts",
   "checkout-office-paid-multi-day": "checkout-office",
+  "checkout-table-paid": "checkout-table",
   "payment-late-recovery-refund-required": "payments",
   "checkout-voucher-full-usage": "discounts",
   "checkout-discount-code": "discounts",
@@ -107,7 +110,7 @@ export const workspaceE2ECaseFlowById = {
 
 /**
  * Flows whose checkout-pool cases need discount seeding, Dotypos discount
- * group lookup, and cowork/meeting-room/office availability preparation.
+ * group lookup, and cowork/meeting-room/office/table availability preparation.
  * `public-site` cases (`contact-form`, `locale-switch`, `locale-smoke-*`)
  * never book or read prepared availability.
  */
@@ -116,6 +119,7 @@ const checkoutPreparationFlows: ReadonlySet<WorkspaceE2EFlowId> =
     "checkout-cowork",
     "checkout-meeting-room",
     "checkout-office",
+    "checkout-table",
     "payments",
     "discounts",
     "referrals",

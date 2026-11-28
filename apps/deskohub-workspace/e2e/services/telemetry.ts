@@ -32,7 +32,8 @@ type E2EPhaseId =
   | "office-availability-preparation"
   | "preview-readiness"
   | "provider-preparation"
-  | "suite-cleanup";
+  | "suite-cleanup"
+  | "table-availability-preparation";
 
 export type E2EResult =
   | {

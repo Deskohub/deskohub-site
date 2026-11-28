@@ -92,6 +92,7 @@ test("wires the case-plan per-date maximums through the real case builders", asy
     },
     meetingRoom: { slots: makeTestMeetingRoomSlots() },
     office: undefined,
+    table: undefined,
   };
   const rejectProviderRequest = () => {
     throw new Error("provider HTTP must not run in a construction test");
@@ -261,6 +262,11 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
     makeTable("provider-room-3", ["reservation:meeting-room"], 1),
     makeTable("provider-room-headroom", ["reservation:meeting-room"], 1),
     makeTable("provider-office", ["reservation:office"], 8),
+    makeTable(
+      "provider-team-table",
+      ["cowork:open-space", "reservation:table"],
+      4
+    ),
     makeTable("hidden-open-space", ["cowork:open-space"], 100, {
       display: false,
     }),
@@ -290,16 +296,17 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
       ),
       "reservation:meeting-room",
       "reservation:office",
+      "reservation:table",
     ].toSorted((left, right) => left.localeCompare(right))
   );
   expect(report.meetsRequiredCapacity).toBe(true);
   expect(report.groups.find(({ id }) => id === "open-space")).toEqual({
     activeReservationCount: 1,
     activeReservationSeatCount: 2,
-    activeVisibleTableCount: 1,
-    assignableTableCount: 1,
-    availableSeatCount: openSpaceMaximum * 8 - 2,
-    availableTableCount: 0,
+    activeVisibleTableCount: 2,
+    assignableTableCount: 2,
+    availableSeatCount: openSpaceMaximum * 8 + 4 - 2,
+    availableTableCount: 1,
     id: "open-space",
     meetsRequiredCapacity: true,
     peakActiveReservationSeatCount: 2,
@@ -307,8 +314,8 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
     requiredAvailableSeatCount: openSpaceMaximum * 2,
     requiredSeatCount: openSpaceMaximum * 4,
     requiredTags: ["cowork:open-space"],
-    seatCounts: [openSpaceMaximum * 8],
-    totalSeatCount: openSpaceMaximum * 8,
+    seatCounts: [4, openSpaceMaximum * 8],
+    totalSeatCount: openSpaceMaximum * 8 + 4,
   });
   expect(report.groups.find(({ id }) => id === "reserved-desk")).toMatchObject({
     activeVisibleTableCount: 1,
@@ -343,6 +350,17 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
     requiredTableCount: 1,
     seatCounts: [8],
   });
+  expect(
+    report.groups.find(({ id }) => id === "reservation:table")
+  ).toMatchObject({
+    assignableTableCount: 1,
+    meetsRequiredCapacity: true,
+    requiredMinimumSeatsPerTable: 2,
+    requiredSeatCount: 2,
+    requiredTableCount: 1,
+    requiredTags: ["cowork:open-space", "reservation:table"],
+    seatCounts: [4],
+  });
   const serialized = JSON.stringify(report);
   expect(serialized).not.toContain("open-space-table");
   expect(serialized).not.toContain("reserved-desk-table");
@@ -351,6 +369,7 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
   expect(serialized).not.toContain("provider-room-3");
   expect(serialized).not.toContain("provider-room-headroom");
   expect(serialized).not.toContain("provider-office");
+  expect(serialized).not.toContain("provider-team-table");
 });
 
 test("fails closed when tables carry only legacy tier tags", () => {
@@ -550,6 +569,51 @@ test("ignores cancelled reservations in capacity accounting", () => {
     availableSeatCount: 32,
     meetsRequiredCapacity: true,
     peakActiveReservationSeatCount: 0,
+  });
+});
+
+test("fails reservation:table capacity when no single table has at least 2 seats", () => {
+  const twoOneSeatTables = makeWorkspaceE2ECapacityReport({
+    from: new Date("2099-08-01T00:00:00.000Z"),
+    reservations: [],
+    tables: [
+      makeTable("solo-table-1", ["cowork:open-space", "reservation:table"], 1),
+      makeTable("solo-table-2", ["cowork:open-space", "reservation:table"], 1),
+    ],
+    to: new Date("2099-09-01T00:00:00.000Z"),
+  });
+
+  expect(
+    twoOneSeatTables.groups.find(({ id }) => id === "reservation:table")
+  ).toMatchObject({
+    assignableTableCount: 2,
+    meetsRequiredCapacity: false,
+    requiredMinimumSeatsPerTable: 2,
+    seatCounts: [1, 1],
+    totalSeatCount: 2,
+  });
+
+  const oneTwoSeatTable = makeWorkspaceE2ECapacityReport({
+    from: new Date("2099-08-01T00:00:00.000Z"),
+    reservations: [],
+    tables: [
+      makeTable(
+        "two-seat-table",
+        ["cowork:open-space", "reservation:table"],
+        2
+      ),
+    ],
+    to: new Date("2099-09-01T00:00:00.000Z"),
+  });
+
+  expect(
+    oneTwoSeatTable.groups.find(({ id }) => id === "reservation:table")
+  ).toMatchObject({
+    assignableTableCount: 1,
+    meetsRequiredCapacity: true,
+    requiredMinimumSeatsPerTable: 2,
+    seatCounts: [2],
+    totalSeatCount: 2,
   });
 });
 

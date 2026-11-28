@@ -58,12 +58,14 @@ import { makeReservationLinkE2ECases } from "./reservation-links";
 import { assertReservationReplacement } from "./reservation-reuse";
 import { makeReservationUrlStateE2ECases } from "./reservation-url-state";
 import { planSignedOutVerificationCase } from "./signed-out-verification";
+import { makeTableE2ECases, type TableE2EPreparation } from "./table";
 
 export type WorkspaceE2EPreparation = {
   readonly customerDiscountGroup: E2EDotyposDiscountGroup;
   readonly discounts: DiscountAvailabilityE2EPreparation;
   readonly meetingRoom: MeetingRoomE2EPreparation;
   readonly office: OfficeE2EPreparation | undefined;
+  readonly table: TableE2EPreparation | undefined;
 };
 
 export const makePublicSiteWorkspaceE2ECases = (
@@ -410,6 +412,7 @@ export const makeWorkspaceE2ECases = ({
             discounts: discountPreparation,
             meetingRoom: preparation.meetingRoom,
             office: preparation.office,
+            table: preparation.table,
           },
         }))
       );
@@ -420,6 +423,15 @@ export const makeWorkspaceE2ECases = ({
           datasourceConfig,
           flowStates,
           preparation: preparation.office,
+        }))
+      );
+
+      cases.push(
+        ...(yield* makeTableE2ECases({
+          config,
+          datasourceConfig,
+          flowStates,
+          preparation: preparation.table,
         }))
       );
 

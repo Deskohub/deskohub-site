@@ -22,6 +22,7 @@ import {
   makeCoworkCheckoutData,
   makeMeetingRoomCheckoutData,
   makeOfficeCheckoutData,
+  makeTableCheckoutData,
   requireCheckoutDate,
   reuseCoworkCheckoutContact,
   selectCoworkDates,
@@ -51,6 +52,7 @@ import {
   meetingRoomE2EUrlStateSlotIndex,
 } from "./meeting-room";
 import type { OfficeE2EPreparation } from "./office";
+import type { TableE2EPreparation } from "./table";
 
 // Contact details and the customer mode must never reach the URL.
 const reservationContactQueryParams = [
@@ -130,6 +132,7 @@ export const makeReservationUrlStateE2ECases = ({
     readonly discounts: DiscountAvailabilityE2EPreparation;
     readonly meetingRoom: MeetingRoomE2EPreparation;
     readonly office: OfficeE2EPreparation | undefined;
+    readonly table: TableE2EPreparation | undefined;
   };
 }): Effect.Effect<readonly WorkspaceE2ECase[], WorkspaceE2EError> =>
   Effect.gen(function* () {
@@ -214,46 +217,66 @@ export const makeReservationUrlStateE2ECases = ({
         timeoutMs: config.timeouts.reservationUrlStateCase,
       },
     ];
-    if (!preparation.office) return cases;
+    if (preparation.office) {
+      // The paid office case holds the other prepared range, so these cases
+      // use the one no case holds.
+      const officeData = makeOfficeCheckoutData(
+        config.baseUrl,
+        preparation.office.urlStateSlot,
+        "url-state-office"
+      );
+      cases.push(
+        {
+          checkoutStates: [],
+          execute: ({ openSession, runStep }) =>
+            assertOfficeUrlState(
+              { config, openSession, runStep },
+              officeData
+            ).pipe(
+              Effect.mapError((cause) =>
+                toWorkspaceE2EError("run office URL-state e2e case", cause)
+              )
+            ),
+          id: "reservation-url-state-office",
+          timeoutMs: config.timeouts.reservationUrlStateCase,
+        },
+        {
+          checkoutStates: [],
+          execute: ({ openSession, runStep }) =>
+            assertOfficeStartsOnLink(
+              { config, openSession, runStep },
+              datasourceConfig,
+              officeData
+            ).pipe(
+              Effect.mapError((cause) =>
+                toWorkspaceE2EError("run office startsOn link e2e case", cause)
+              )
+            ),
+          id: "reservation-url-state-office-starts-on-link",
+          timeoutMs: config.timeouts.reservationUrlStateCase,
+        }
+      );
+    }
 
-    // The paid office case holds the other prepared range, so these cases
-    // use the one no case holds.
-    const officeData = makeOfficeCheckoutData(
-      config.baseUrl,
-      preparation.office.urlStateSlot,
-      "url-state-office"
-    );
-    cases.push(
-      {
+    if (preparation.table) {
+      const tableData = makeTableCheckoutData(
+        config.baseUrl,
+        preparation.table.urlStateSlot,
+        "url-state-table"
+      );
+      cases.push({
         checkoutStates: [],
         execute: ({ openSession, runStep }) =>
-          assertOfficeUrlState(
-            { config, openSession, runStep },
-            officeData
-          ).pipe(
+          assertTableUrlState({ config, openSession, runStep }, tableData).pipe(
             Effect.mapError((cause) =>
-              toWorkspaceE2EError("run office URL-state e2e case", cause)
+              toWorkspaceE2EError("run Team Table URL-state e2e case", cause)
             )
           ),
-        id: "reservation-url-state-office",
+        id: "reservation-url-state-table",
         timeoutMs: config.timeouts.reservationUrlStateCase,
-      },
-      {
-        checkoutStates: [],
-        execute: ({ openSession, runStep }) =>
-          assertOfficeStartsOnLink(
-            { config, openSession, runStep },
-            datasourceConfig,
-            officeData
-          ).pipe(
-            Effect.mapError((cause) =>
-              toWorkspaceE2EError("run office startsOn link e2e case", cause)
-            )
-          ),
-        id: "reservation-url-state-office-starts-on-link",
-        timeoutMs: config.timeouts.reservationUrlStateCase,
-      }
-    );
+      });
+    }
+
     return cases;
   });
 
@@ -486,6 +509,62 @@ const assertOfficeUrlState = (
       timeoutMs: config.timeouts.browserNavigation,
     });
     log("Office reservation URL-state e2e passed");
+  });
+
+const assertTableUrlState = (
+  context: UrlStateCaseContext,
+  data: CheckoutData
+): Effect.Effect<void, WorkspaceE2EError> =>
+  Effect.gen(function* () {
+    const { config, openSession, runStep } = context;
+    const pathname = "/en-US/reservation/table";
+    const table = yield* tryWorkspaceE2ESync("read Team Table slot", () => {
+      assert(data.table, "Team Table slot missing");
+      return data.table;
+    });
+    yield* runStep({
+      execute: openReservationPage(context, pathname),
+      id: "open-table-page",
+      timeoutMs: config.timeouts.browserNavigation,
+    });
+    yield* runStep({
+      execute: Effect.gen(function* () {
+        const browser = yield* openSession;
+        yield* prepareReservationSelection({
+          preparation: toReservationSelectionPreparation(data),
+          session: browser,
+          timeoutMs: config.timeouts.uiTransition,
+          timeouts: config.timeouts,
+        });
+      }),
+      id: "select-table-size-date-and-time",
+      timeoutMs: config.timeouts.uiTransition,
+    });
+    const state: ReservationUrlState = {
+      pathname,
+      preserved: unrelatedQueryParams,
+      selection: {
+        date: table.date,
+        endTime: table.endTime,
+        seats: String(table.seats),
+        startTime: table.startTime,
+      },
+    };
+    yield* runStep({
+      execute: waitForReservationUrlState(
+        context,
+        "Team Table selection in the URL",
+        state
+      ),
+      id: "assert-table-url",
+      timeoutMs: config.timeouts.uiTransition,
+    });
+    yield* runStep({
+      execute: reloadAndAssertRestoredSelection(context, data, state),
+      id: "reload-and-assert-table-restored",
+      timeoutMs: config.timeouts.browserNavigation,
+    });
+    log("Team Table reservation URL-state e2e passed");
   });
 
 /**

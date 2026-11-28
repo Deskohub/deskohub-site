@@ -7,7 +7,11 @@ import {
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
 import { workspaceReservationIdSchema } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
-import { makeCoworkCheckoutData } from "../checkout/data";
+import { instantStringSchema } from "@/shared/utils/temporal";
+import {
+  makeCoworkCheckoutData,
+  makeTableCheckoutData,
+} from "../checkout/data";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { makeE2ERunContext } from "../services/telemetry";
 import type { CheckoutFlowState } from "../types";
@@ -92,22 +96,50 @@ test("reads a prepared run plan with no office and rejects malformed preparation
   const directory = await mkdtemp(resolve(tmpdir(), "workspace-e2e-run-plan-"));
   try {
     const path = resolve(directory, "plan.json");
-    const plan: WorkspaceE2ERunPlan = {
-      preparation: {
-        customerDiscountGroup: {
-          basisPoints: 1000,
-          id: DotyposDiscountGroupIdSchema.make("discount-group-1"),
-        },
-        discounts: {
-          availableBasicDates: [],
-          availablePlusDates: [],
-          availableReservedDeskDates: [],
-        },
-        meetingRoom: { slots: [] },
-        office: undefined,
+    const basePreparation: NonNullable<WorkspaceE2ERunPlan["preparation"]> = {
+      customerDiscountGroup: {
+        basisPoints: 1000,
+        id: DotyposDiscountGroupIdSchema.make("discount-group-1"),
       },
+      discounts: {
+        availableBasicDates: [],
+        availablePlusDates: [],
+        availableReservedDeskDates: [],
+      },
+      meetingRoom: { slots: [] },
+      office: undefined,
+      table: undefined,
+    };
+    const plan: WorkspaceE2ERunPlan = {
+      preparation: basePreparation,
       runContext: makeE2ERunContext(makeTestE2EEnvironment()),
       version: 2,
+    };
+    const tableSlot = {
+      date: "2026-08-20",
+      endsAt: instantStringSchema.make("2026-08-20T10:00:00Z"),
+      endTime: "12:00",
+      seats: 4,
+      startsAt: instantStringSchema.make("2026-08-20T08:00:00Z"),
+      startTime: "10:00",
+    };
+    const planWithTable: WorkspaceE2ERunPlan = {
+      ...plan,
+      preparation: {
+        ...basePreparation,
+        table: {
+          exclusiveForSingleTable: true,
+          slot: tableSlot,
+          urlStateSlot: {
+            date: "2026-08-21",
+            endsAt: instantStringSchema.make("2026-08-21T10:00:00Z"),
+            endTime: "12:00",
+            seats: 4,
+            startsAt: instantStringSchema.make("2026-08-21T08:00:00Z"),
+            startTime: "10:00",
+          },
+        },
+      },
     };
     const planWithoutPreparation: WorkspaceE2ERunPlan = {
       runContext: plan.runContext,
@@ -118,6 +150,17 @@ test("reads a prepared run plan with no office and rejects malformed preparation
 
     await writeFile(path, JSON.stringify(plan));
     expect(await readWorkspaceE2ERunPlan(path)).toEqual(plan);
+
+    await writeFile(path, JSON.stringify(planWithTable));
+    expect(await readWorkspaceE2ERunPlan(path)).toEqual(planWithTable);
+
+    const tableData = makeTableCheckoutData(
+      "https://workspace.example.test",
+      tableSlot
+    );
+    await writeWorkspaceE2ECaseJournal(caseId, [{ data: tableData }]);
+    const [restoredTable] = await readWorkspaceE2ECaseJournals([caseId]);
+    expect(restoredTable?.data).toEqual(tableData);
 
     await writeFile(path, JSON.stringify({ ...plan, preparation: {} }));
     await expect(readWorkspaceE2ERunPlan(path)).rejects.toThrow(

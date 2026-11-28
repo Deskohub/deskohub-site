@@ -19,6 +19,7 @@ import {
   isWorkspaceE2ECaseId,
   isWorkspaceE2ENightlyCaseId,
   isWorkspaceE2EOfficeCaseId,
+  isWorkspaceE2ETableCaseId,
   workspaceE2ECaseIds,
 } from "./playwright-checkout/case-catalog";
 import { workspaceE2ECheckoutJournalOwners } from "./playwright-checkout/journal-owners";
@@ -57,6 +58,8 @@ export const readRunOwnership = async (
     }) &&
     (plan.preparation?.office !== undefined ||
       !isWorkspaceE2EOfficeCaseId(caseId)) &&
+    (plan.preparation?.table !== undefined ||
+      !isWorkspaceE2ETableCaseId(caseId)) &&
     (nightlyCasesEnabled(environment) || !isWorkspaceE2ENightlyCaseId(caseId));
   if (
     context.runId !==

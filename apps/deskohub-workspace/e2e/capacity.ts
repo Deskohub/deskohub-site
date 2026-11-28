@@ -7,6 +7,7 @@ import {
   workspaceCoworkReservedDeskTableTag,
   workspaceMeetingRoomReservationTableTag,
   workspaceOfficeReservationTableTag,
+  workspaceTableReservationTableTag,
 } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import {
   workspaceProductMonitorOptions,
@@ -21,6 +22,7 @@ import {
   workspaceE2EProviderHeadroomRuns,
 } from "./allocation";
 import { workspaceE2EOfficeReservationSeats } from "./office";
+import { workspaceE2ETableMinimumSeats } from "./table";
 
 const provisionedRunCapacity =
   workspaceE2EConcurrentRunTarget + workspaceE2EProviderHeadroomRuns;
@@ -69,6 +71,7 @@ type CapacityGroup = {
   readonly id: string;
   readonly requiredAvailableSeatCount?: number;
   readonly requiredAvailableTableCount?: number;
+  readonly requiredMinimumSeatsPerTable?: number;
   readonly requiredSeatCount?: number;
   readonly requiredTableCount?: number;
   readonly requiredTags: readonly string[];
@@ -122,6 +125,16 @@ const newSaleCapacityGroups: readonly CapacityGroup[] = [
     requiredTableCount: 1,
     requiredTags: [workspaceOfficeReservationTableTag],
   },
+  {
+    id: workspaceTableReservationTableTag,
+    requiredMinimumSeatsPerTable: workspaceE2ETableMinimumSeats,
+    requiredSeatCount: workspaceE2ETableMinimumSeats,
+    requiredTableCount: 1,
+    requiredTags: [
+      workspaceCoworkOpenSpaceTableTag,
+      workspaceTableReservationTableTag,
+    ],
+  },
 ];
 
 /**
@@ -158,6 +171,7 @@ export type WorkspaceE2ECapacityGroupReport = {
   readonly peakActiveReservationTableCount: number;
   readonly requiredAvailableSeatCount?: number;
   readonly requiredAvailableTableCount?: number;
+  readonly requiredMinimumSeatsPerTable?: number;
   readonly requiredSeatCount?: number;
   readonly requiredTableCount?: number;
   readonly requiredTags: readonly string[];
@@ -192,6 +206,7 @@ export const getWorkspaceE2ECapacityFailures = (
               group.peakActiveReservationTableCount,
             requiredAvailableSeatCount: group.requiredAvailableSeatCount,
             requiredAvailableTableCount: group.requiredAvailableTableCount,
+            requiredMinimumSeatsPerTable: group.requiredMinimumSeatsPerTable,
             requiredSeatCount: group.requiredSeatCount,
             requiredTableCount: group.requiredTableCount,
             totalSeatCount: group.totalSeatCount,
@@ -254,11 +269,16 @@ const makeWorkspaceE2ECapacityGroupReports = ({
       0,
       assignableTables.length - peakActiveReservationTableCount
     );
+    const { requiredMinimumSeatsPerTable } = group;
     const meetsRequiredCapacity =
       (group.requiredSeatCount === undefined ||
         totalSeatCount >= group.requiredSeatCount) &&
       (group.requiredTableCount === undefined ||
         assignableTables.length >= group.requiredTableCount) &&
+      (requiredMinimumSeatsPerTable === undefined ||
+        assignableTables.some(
+          ({ seats }) => seats >= requiredMinimumSeatsPerTable
+        )) &&
       (group.requiredAvailableSeatCount === undefined ||
         availableSeatCount >= group.requiredAvailableSeatCount) &&
       (group.requiredAvailableTableCount === undefined ||
@@ -281,6 +301,11 @@ const makeWorkspaceE2ECapacityGroupReports = ({
       ...(group.requiredAvailableTableCount === undefined
         ? {}
         : { requiredAvailableTableCount: group.requiredAvailableTableCount }),
+      ...(group.requiredMinimumSeatsPerTable === undefined
+        ? {}
+        : {
+            requiredMinimumSeatsPerTable: group.requiredMinimumSeatsPerTable,
+          }),
       ...(group.requiredSeatCount === undefined
         ? {}
         : { requiredSeatCount: group.requiredSeatCount }),

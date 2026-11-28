@@ -27,6 +27,7 @@ const inventory = [
     table(`private-room-${index}`, ["reservation:meeting-room"])
   ),
   table("private-office", ["reservation:office"]),
+  table("private-table", ["cowork:open-space", "reservation:table"], "4"),
 ];
 const page = (data: unknown[]) => ({
   data,
