@@ -1,4 +1,4 @@
-import { Effect, Result } from "effect";
+import { Effect, Predicate, Result } from "effect";
 import { HttpClient } from "effect/http";
 import {
   tryWorkspaceE2ESync,
@@ -101,19 +101,11 @@ const decodeVercelLogPage = (
   payload: unknown,
   deploymentId: string
 ): VercelLogPage => {
-  const candidate = payload as {
-    hasMoreRows?: unknown;
-    rows?: unknown;
-  } | null;
-  if (
-    candidate === null ||
-    typeof candidate !== "object" ||
-    Array.isArray(candidate)
-  ) {
+  if (!Predicate.isObject(payload)) {
     throw invalidVercelLogPayload();
   }
-  const hasMoreRows = candidate?.hasMoreRows ?? false;
-  const rows = candidate?.rows ?? [];
+  const hasMoreRows = payload.hasMoreRows ?? false;
+  const rows = payload.rows ?? [];
   if (
     typeof hasMoreRows !== "boolean" ||
     !Array.isArray(rows) ||
@@ -124,25 +116,21 @@ const decodeVercelLogPage = (
 
   return {
     hasMoreRows,
-    rows: rows.map((row) => {
-      const request = row as {
-        deploymentId?: unknown;
-        logs?: unknown;
-        messageTruncated?: unknown;
-        requestId?: unknown;
-        timestamp?: unknown;
-      } | null;
-      const logs = request?.logs ?? [];
+    rows: rows.map((request: unknown) => {
+      if (!Predicate.isObject(request)) {
+        throw invalidVercelLogPayload();
+      }
+      const logs = request.logs ?? [];
       let timestampInMs: number;
-      if (typeof request?.timestamp === "number") {
+      if (typeof request.timestamp === "number") {
         timestampInMs = request.timestamp;
-      } else if (typeof request?.timestamp === "string") {
+      } else if (typeof request.timestamp === "string") {
         timestampInMs = Date.parse(request.timestamp);
       } else {
         timestampInMs = Number.NaN;
       }
       if (
-        typeof request?.requestId !== "string" ||
+        typeof request.requestId !== "string" ||
         request.requestId.length === 0 ||
         request.deploymentId !== deploymentId ||
         !Array.isArray(logs) ||
@@ -154,13 +142,10 @@ const decodeVercelLogPage = (
         throw invalidVercelLogPayload();
       }
       return {
-        logs: logs.map((log) => {
-          const entry = log as {
-            message?: unknown;
-            messageTruncated?: unknown;
-          } | null;
+        logs: logs.map((entry: unknown) => {
           if (
-            typeof entry?.message !== "string" ||
+            !Predicate.isObject(entry) ||
+            typeof entry.message !== "string" ||
             (entry.messageTruncated !== undefined &&
               typeof entry.messageTruncated !== "boolean")
           ) {
@@ -308,24 +293,20 @@ const parsePreviewE2ELogLine = (
   } catch {
     return { kind: "unreadable" };
   }
-  const candidate = parsed as {
-    code?: unknown;
-    recipient?: unknown;
-    text?: unknown;
-  } | null;
   if (
-    candidate?.code !== workspaceE2EPreviewE2ELogCode ||
-    typeof candidate.recipient !== "string"
+    !Predicate.isObject(parsed) ||
+    parsed.code !== workspaceE2EPreviewE2ELogCode ||
+    typeof parsed.recipient !== "string"
   ) {
     return { kind: "unreadable" };
   }
-  if (candidate.recipient.toLowerCase() !== expectedRecipient.toLowerCase()) {
+  if (parsed.recipient.toLowerCase() !== expectedRecipient.toLowerCase()) {
     return { kind: "other-recipient" };
   }
-  if (typeof candidate.text !== "string" || candidate.text.length === 0) {
+  if (typeof parsed.text !== "string" || parsed.text.length === 0) {
     return { kind: "unreadable" };
   }
-  return { kind: "match", text: candidate.text };
+  return { kind: "match", text: parsed.text };
 };
 
 function retrieveWorkspaceE2EMagicLink(

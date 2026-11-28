@@ -5,7 +5,8 @@ import {
 } from "@deskohub/dotypos";
 import { Effect } from "effect";
 import { floorToWholeHour } from "@/shared/utils/temporal";
-import type { DatasourceConfig } from "../config";
+import { getDatasourceConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import {
   seedWorkspaceE2EReservationHistory,
   type WorkspaceE2EReservationHistoryDatabase,
@@ -122,7 +123,7 @@ const makeFixtureInput = (referenceNow = Temporal.Now.instant()) => {
   } satisfies WorkspaceE2EReservationHistoryProviderProjection;
   const input = {
     customerId,
-    datasourceConfig: {} as DatasourceConfig,
+    datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
     dotyposReservationId,
   } satisfies WorkspaceE2EReservationHistoryFixtureInput;
   return { input, providerProjection };

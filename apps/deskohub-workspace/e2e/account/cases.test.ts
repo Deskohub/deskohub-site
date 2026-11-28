@@ -18,11 +18,14 @@ import {
 import type { AccountSection } from "@/features/account/sections";
 import { isLocale, type Locale, locales, m } from "@/features/i18n";
 import { languageNames } from "@/features/i18n/language-labels";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { WorkspaceE2EStep, WorkspaceE2EStepRunner } from "../case-runner";
-import type { DatasourceConfig } from "../config";
+import { unopenedE2EDatabase } from "../cases/e2e-fixtures.test-utils";
+import { type DatasourceConfig, getDatasourceConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { type WorkspaceE2EError, workspaceE2ETimeoutError } from "../errors";
 import { formatWorkspaceE2EFailureAnnotation } from "../github-actions";
-import { E2EDatabase } from "../integrations/database.service";
+import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import { makeE2ETelemetryMock } from "../services/telemetry.mock";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
@@ -235,9 +238,7 @@ const readFakeCallback = (link: string) => {
     new URL(link).searchParams.get("callbackURL") ?? "",
     "https://callback.invalid"
   );
-  const locale = fakeLocalePath.exec(callback.pathname)?.[1] as
-    | Locale
-    | undefined;
+  const locale = fakePathLocale(callback.pathname);
   if (locale === undefined) throw new Error("the synthetic link has no locale");
   return {
     locale,
@@ -693,7 +694,7 @@ class FakeAccountExternalState {
       lastName: profile.lastName,
       phone: profile.phone,
       points: null,
-    } as Customer;
+    };
   }
 
   assertNoProfile(email: string) {
@@ -747,7 +748,7 @@ class FakeAccountExternalState {
 
   assertNoAuthRows(userId: string) {
     const user = this.usersById.get(userId);
-    if (user || user?.session) {
+    if (user) {
       throw new Error("the synthetic auth rows still exist");
     }
   }
@@ -878,7 +879,10 @@ class FakeAccountExternalState {
       if (callback.returnTo !== undefined) {
         failure.set(
           signInCallbackReturnParam,
-          encodeAuthCallbackReturn(callback.returnTo)
+          requireValue(
+            encodeAuthCallbackReturn(callback.returnTo),
+            "callback return"
+          )
         );
       }
       return {
@@ -1145,6 +1149,10 @@ class FakeAccountExternalState {
 }
 
 const fakeLocalePath = new RegExp(`^/(${locales.join("|")})(?=/|$)`);
+const fakePathLocale = (pathname: string) => {
+  const locale = fakeLocalePath.exec(pathname)?.[1];
+  return isLocale(locale) ? locale : undefined;
+};
 
 const syntheticAccountDataExportPath = "/en-US/account/data-export";
 const syntheticAccountDataExportActionSelector =
@@ -1371,9 +1379,7 @@ class FakeBrowser {
     this.selectedSection = "";
     this.languageControlLabel = null;
     this.heading = null;
-    const pathLocale = fakeLocalePath.exec(new URL(requested).pathname)?.[1] as
-      | Locale
-      | undefined;
+    const pathLocale = fakePathLocale(new URL(requested).pathname);
     const url =
       pathLocale === undefined
         ? requested
@@ -1499,9 +1505,8 @@ class FakeBrowser {
         this.navigate(landing);
         return;
       }
-      const destinationLocale = (fakeLocalePath.exec(
-        new URL(landing).pathname
-      )?.[1] ?? "en-US") as Locale;
+      const destinationLocale =
+        fakePathLocale(new URL(landing).pathname) ?? "en-US";
       const landingLocale = result.failed
         ? destinationLocale
         : this.resolveLocale(destinationLocale);
@@ -1525,7 +1530,10 @@ class FakeBrowser {
   }
 
   private pageLocaleOf(url: string): Locale {
-    return fakeLocalePath.exec(new URL(url).pathname)?.[1] as Locale;
+    const locale = fakePathLocale(new URL(url).pathname);
+    if (locale === undefined)
+      throw new Error("the synthetic page has no locale");
+    return locale;
   }
 
   /** Native activation of a header language switcher link. */
@@ -1586,7 +1594,7 @@ class FakeBrowser {
       selectorOrDestination: selector,
     });
     if (
-      (profileDraftSelectors as readonly string[]).includes(selector) ||
+      profileDraftSelectors.some((field) => field === selector) ||
       selector === billingCompanyNameSelector
     ) {
       this.external.profileDrafts.set(selector, value);
@@ -2203,7 +2211,7 @@ const makeConfig = (): WorkspaceE2EAccountConfig => ({
   bypassSecret: undefined,
   expectedHost,
   locale: "en-US",
-  runId: syntheticRunId as WorkspaceE2EAccountConfig["runId"],
+  runId: workspaceE2ERunIdSchema.make(syntheticRunId),
   timeouts: workspaceE2ETimeouts,
   vercelProjectId: "workspace-e2e-project",
   vercelToken: "synthetic-vercel-log-token",
@@ -2290,7 +2298,7 @@ const makeScenario = (
         return { code, link };
       }),
   };
-  const datasourceConfig = {} as DatasourceConfig;
+  const datasourceConfig = getDatasourceConfig(makeTestE2EEnvironment());
   const laneBrowser: WorkspaceE2EAccountLaneBrowser = {
     ...fakeAccountBrowser(() => browser),
     assistant: {
@@ -2465,7 +2473,7 @@ const httpClientLayer = FetchHttpClient.layer.pipe(
 
 const accountCaseTestLayer = Layer.mergeAll(
   makeE2ETelemetryMock([]),
-  Layer.succeed(E2EDatabase, E2EDatabase.of({ db: {} as never })),
+  unopenedE2EDatabase,
   httpClientLayer
 );
 
@@ -2475,9 +2483,7 @@ const makeCaseExecution = (
   stepIds: string[],
   verifyPage?: WorkspaceE2EStep<void>
 ): Effect.Effect<void, WorkspaceE2EError> => {
-  const runStep: WorkspaceE2EStepRunner = <A, R>(
-    step: WorkspaceE2EStep<A, R>
-  ) => {
+  const runStep: WorkspaceE2EStepRunner = (step) => {
     stepIds.push(step.id);
     // Deliberately return the implementation's Effect unchanged. The fake
     // boundary models its dependencies; it does not replace semantic steps.
@@ -3186,17 +3192,17 @@ const runLanguageCase = async (
     options
   );
   const stepIds: string[] = [];
-  const runStep: WorkspaceE2EStepRunner = <A, R>(
-    step: WorkspaceE2EStep<A, R>
-  ) => {
+  const runStep: WorkspaceE2EStepRunner = (step) => {
     stepIds.push(step.id);
     return step.execute;
   };
   const exit = await Effect.runPromiseExit(
-    selected.execute({
-      journalRef: scenario.journalRef,
-      runStep,
-    }) as Effect.Effect<void, WorkspaceE2EError>
+    selected
+      .execute({
+        journalRef: scenario.journalRef,
+        runStep,
+      })
+      .pipe(Effect.provide(accountCaseTestLayer))
   );
   return { exit, scenario, stepIds };
 };

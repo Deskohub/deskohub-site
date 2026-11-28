@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { parsePhoneNumber } from "@deskohub/phone-number";
-import { chromium, errors, type Page } from "@playwright/test";
+import { chromium, errors } from "@playwright/test";
 import { Option } from "effect";
 import { baseLocale, defaultPhoneRegion } from "@/features/i18n";
 import {
+  type AccountSection,
   accountSectionLabel,
-  accountSections,
 } from "../../features/account/sections";
 import { playwrightChromiumAvailable } from "../../shared/testing/playwright-browser";
 import {
@@ -15,18 +15,20 @@ import {
   type WorkspaceE2EProfileNavigationDiagnosticCode,
 } from "../errors";
 import { formatWorkspaceE2EFailureAnnotation } from "../github-actions";
-import { accountSectionLandmarks } from "./account-sections";
 import {
+  type AccountSectionNavigationPage,
+  accountSectionLandmarks,
+  selectAccountSection,
+} from "./account-sections";
+import {
+  type ProfileNavigationBrowser,
   triggerProfileHistoryBack,
-  verifyProfileNavigation,
+  verifyProfileNavigationInBrowser,
 } from "./profile-navigation";
 
-type ProfileNavigationSection =
-  | "reservations"
-  | "profile"
-  | "billing"
-  | "legal"
-  | "danger";
+type ProfileNavigationDialog = Awaited<
+  ReturnType<ProfileNavigationBrowser["waitForDialog"]>
+>;
 
 type ProfileNavigationState = {
   billing: {
@@ -39,12 +41,8 @@ type ProfileNavigationState = {
     lastName: string;
     phone: string;
   };
-  section: ProfileNavigationSection;
+  section: AccountSection;
   url: string;
-};
-
-type ProfileNavigationFakePage = {
-  readonly page: Page;
 };
 
 type ProfileNavigationFailurePhase =
@@ -53,10 +51,10 @@ type ProfileNavigationFailurePhase =
 
 const privateFailureDetails = "private profile navigation fixture details";
 
-const makeProfileNavigationFakePage = (
+const makeProfileNavigationBrowser = (
   baseUrl: string,
   failurePhase?: ProfileNavigationFailurePhase
-): ProfileNavigationFakePage => {
+): ProfileNavigationBrowser => {
   const homeUrl = `${baseUrl}/en-US`;
   const accountUrl = `${baseUrl}/en-US/account`;
   const originalProfile = {
@@ -83,13 +81,7 @@ const makeProfileNavigationFakePage = (
     section: "reservations",
     url: accountUrl,
   };
-  let dialogResolver:
-    | ((dialog: {
-        readonly accept: () => Promise<void>;
-        readonly dismiss: () => Promise<void>;
-        readonly type: () => string;
-      }) => void)
-    | undefined;
+  let dialogResolver: ((dialog: ProfileNavigationDialog) => void) | undefined;
   let documentReloaded = false;
 
   const isProfileFormVisible = () =>
@@ -125,29 +117,16 @@ const makeProfileNavigationFakePage = (
     name.startsWith("heading:Customer accounts are temporarily unavailable")
       ? 0
       : 1;
-  const expectedText = (value: unknown): string | undefined => {
-    if (!Array.isArray(value)) return undefined;
-    const first = value[0];
-    if (typeof first === "string") return first;
-    if (first && typeof first === "object" && "string" in first) {
-      const stringValue = first.string;
-      return typeof stringValue === "string" ? stringValue : undefined;
-    }
-    return undefined;
-  };
-
   // Like the account layout, a section switch records its section in the
   // account pathname.
-  const switchSection = (section: ProfileNavigationSection) => {
+  const switchSection = (section: AccountSection) => {
     state.section = section;
     state.url = `${accountUrl}/${section}`;
   };
 
   const requestDialog = (kind: "history-back" | "home") => {
-    let resolveAction!: () => void;
-    const action = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
+    const { promise: action, resolve: resolveAction } =
+      Promise.withResolvers<void>();
     const dialog = {
       accept: async () => {
         if (kind === "home") {
@@ -167,139 +146,122 @@ const makeProfileNavigationFakePage = (
     return action;
   };
 
-  const makeLocator = (name: string) => {
-    const locator = {
-      _apiName: "Locator",
-      elementHandle: async () => ({
-        dispose: async () => {},
-        sectionLink: name,
-      }),
-      _expect: async (
-        expression: string,
-        parameters: Record<string, unknown>
-      ) => {
-        let actual: boolean | number | string;
-        let matches: boolean;
-        if (expression === "to.be.visible") {
-          actual = isVisible(name);
-          matches = actual;
-        } else if (expression === "to.have.count") {
-          actual = countFor(name);
-          matches = actual === parameters.expectedNumber;
-        } else if (expression === "to.have.value") {
-          actual = valueFor(name);
-          matches = actual === expectedText(parameters.expectedText);
-        } else {
-          actual = true;
-          matches = true;
-        }
-        return {
-          matches,
-          received: { value: actual },
-        };
-      },
-      click: async () => {
-        if (name.startsWith("section:")) {
-          switchSection(
-            name.slice("section:".length) as ProfileNavigationSection
-          );
-          return;
-        }
-        if (name === "home-link") {
-          if (state.dirty) return requestDialog("home");
-          state.url = homeUrl;
-          state.section = "reservations";
-          return;
-        }
-        if (name === "account-link") {
-          state.url = accountUrl;
-          state.section = "reservations";
-          return;
-        }
-        if (name === "#account-profile-submit") {
-          if (
-            state.billing.kind === "business" &&
-            state.billing.companyName === ""
-          ) {
-            switchSection("billing");
-          }
-        }
-      },
-      evaluate: async () => {
-        return "Please fill out this field.";
-      },
-      fill: async (value: string) => {
-        if (
-          name === "#account-profile-billing-company-name" &&
-          state.section !== "billing"
-        ) {
-          throw new Error("billing company fill attempted while hidden");
-        }
-        switch (name) {
-          case "#account-profile-first-name":
-            state.profile.firstName = value;
-            break;
-          case "#account-profile-billing-company-name":
-            state.billing.companyName = value;
-            break;
-        }
-        state.dirty = true;
-      },
-      getByRole: (role: string, options: { readonly name?: string }) => {
-        if (role !== "link")
-          throw new Error(`unsupported banner role: ${role}`);
-        if (options.name === "Deskohub Workspace")
-          return makeLocator("home-link");
-        if (options.name === "Account") return makeLocator("account-link");
-        throw new Error(`unsupported banner link: ${options.name}`);
-      },
-      inputValue: async () => {
-        if (
-          failurePhase === "saved-profile-baseline" &&
-          name === "#account-profile-first-name"
-        ) {
-          throw new Error(privateFailureDetails);
-        }
-        return valueFor(name);
-      },
-      isVisible: async () => isVisible(name),
-      toString: () => `Locator(${name})`,
-      waitFor: async (options?: { readonly state?: string }) => {
-        if (options?.state === "visible" && !isVisible(name)) {
-          throw new Error(`locator is not visible: ${name}`);
-        }
-      },
-    };
-    return locator;
-  };
-
-  const getByRole = (
-    role: string,
-    options: { readonly name?: string } = {}
-  ) => {
-    if (role === "banner") return makeLocator("banner");
-    if (role === "link") {
-      const section = accountSections.find(
-        (candidate) => options.name === accountSectionLabel(candidate, "en-US")
-      );
-      if (section) return makeLocator(`section:${section}`);
-    }
-    if (role === "heading") return makeLocator(`heading:${options.name ?? ""}`);
-    throw new Error(`unsupported role: ${role}`);
-  };
-
-  const page = Object.assign({} as Page, {
-    _apiName: "Page",
-    context: () => ({ _options: { baseURL: baseUrl } }),
-    evaluate: async (expression: unknown) => {
-      const source = String(expression);
-      if (source.includes("window.history.back()")) {
-        return requestDialog("history-back");
-      }
-      throw new Error("unsupported page evaluation");
+  const makeLocator = (
+    name: string
+  ): ReturnType<ProfileNavigationBrowser["locator"]> => ({
+    expectAttribute: async (attribute, value) => {
+      expect(name).toBe("account-link");
+      expect(attribute).toBe("href");
+      expect(value).toBe("/en-US/account");
     },
-    getByRole,
-    goto: async (url: string) => {
+    expectCount: async (count) => {
+      expect(countFor(name)).toBe(count);
+    },
+    expectValue: async (value) => {
+      expect(valueFor(name)).toBe(value);
+    },
+    expectVisible: async () => {
+      expect(isVisible(name)).toBe(true);
+    },
+    click: async () => {
+      if (name === "home-link") {
+        if (state.dirty) return requestDialog("home");
+        state.url = homeUrl;
+        state.section = "reservations";
+        return;
+      }
+      if (name === "account-link") {
+        state.url = accountUrl;
+        state.section = "reservations";
+        return;
+      }
+      if (name === "#account-profile-submit") {
+        if (
+          state.billing.kind === "business" &&
+          state.billing.companyName === ""
+        ) {
+          switchSection("billing");
+        }
+      }
+    },
+    fill: async (value: string) => {
+      if (
+        name === "#account-profile-billing-company-name" &&
+        state.section !== "billing"
+      ) {
+        throw new Error("billing company fill attempted while hidden");
+      }
+      switch (name) {
+        case "#account-profile-first-name":
+          state.profile.firstName = value;
+          break;
+        case "#account-profile-billing-company-name":
+          state.billing.companyName = value;
+          break;
+      }
+      state.dirty = true;
+    },
+    inputValue: async () => {
+      if (
+        failurePhase === "saved-profile-baseline" &&
+        name === "#account-profile-first-name"
+      ) {
+        throw new Error(privateFailureDetails);
+      }
+      return valueFor(name);
+    },
+  });
+
+  const sectionPage: AccountSectionNavigationPage = {
+    getSectionLink: (label) => {
+      const section = (["profile", "billing"] as const).find(
+        (candidate) => accountSectionLabel(candidate, "en-US") === label
+      );
+      if (section === undefined)
+        throw new Error(`unexpected section: ${label}`);
+      return {
+        click: async () => switchSection(section),
+        waitForHandler: async () => {
+          if (
+            documentReloaded &&
+            failurePhase === "profile-handler-wait" &&
+            section === "profile"
+          ) {
+            throw new errors.TimeoutError(privateFailureDetails);
+          }
+        },
+      };
+    },
+    viewportSize: () => ({ height: 900, width: 1440 }),
+    waitForFunction: async (
+      _predicate: unknown,
+      target: string | { readonly section: AccountSection }
+    ) => {
+      if (typeof target !== "string" && target.section !== state.section) {
+        throw new Error("profile fixture did not select the requested section");
+      }
+    },
+  };
+
+  return {
+    locator: makeLocator,
+    headerLink: (name) => {
+      if (name === "Deskohub Workspace") return makeLocator("home-link");
+      if (name === "Account") return makeLocator("account-link");
+      throw new Error(`unsupported banner link: ${name}`);
+    },
+    heading: (name) => makeLocator(`heading:${name}`),
+    selectSection: (section, onStage) =>
+      selectAccountSection(sectionPage, section, onStage),
+    billingCompanyValidationMessage: async () => "Please fill out this field.",
+    historyBack: () => requestDialog("history-back"),
+    waitForDialog: () => {
+      const { promise, resolve } =
+        Promise.withResolvers<ProfileNavigationDialog>();
+      dialogResolver = resolve;
+      return promise;
+    },
+    goto: async (url) => {
       if (url !== accountUrl)
         throw new Error(`unsupported document URL: ${url}`);
       state.url = url;
@@ -309,59 +271,14 @@ const makeProfileNavigationFakePage = (
       state.billing = { ...originalBilling };
       documentReloaded = true;
     },
-    locator: (selector: string) => makeLocator(selector),
-    mainFrame: () => ({
-      _expect: async (
-        expression: string,
-        parameters: Record<string, unknown>
-      ) => {
-        if (expression !== "to.have.url")
-          throw new Error(`unsupported page expectation: ${expression}`);
-        const expected = expectedText(parameters.expectedText);
-        return {
-          matches: state.url === expected,
-          received: { value: state.url },
-        };
-      },
-    }),
-    toHaveURL: undefined,
-    viewportSize: () => ({ height: 1000, width: 1440 }),
-    waitForEvent: async () =>
-      new Promise((resolve) => {
-        dialogResolver = resolve;
-      }),
-    waitForFunction: async (_predicate: unknown, argument: unknown) => {
-      if (
-        typeof argument === "object" &&
-        argument !== null &&
-        "sectionLink" in argument
-      ) {
-        if (
-          documentReloaded &&
-          failurePhase === "profile-handler-wait" &&
-          (argument as { readonly sectionLink: string }).sectionLink ===
-            "section:profile"
-        ) {
-          throw new errors.TimeoutError(privateFailureDetails);
-        }
-        return { dispose: async () => {}, jsonValue: async () => "ready" };
-      }
-      if (
-        typeof argument === "object" &&
-        argument !== null &&
-        "section" in argument
-      ) {
-        const section = (argument as { readonly section: string }).section;
-        if (state.section !== section) {
-          throw new Error(`section did not become ready: ${section}`);
-        }
-      }
-      return { dispose: async () => {}, jsonValue: async () => true };
+    expectURL: async (url) => {
+      expect(state.url).toBe(url);
     },
-    waitForURL: async () => {},
-  });
-
-  return { page };
+    waitForURL: (url) =>
+      Promise.resolve().then(() => {
+        expect(state.url).toBe(url);
+      }),
+  };
 };
 
 const chromiumAvailable = await playwrightChromiumAvailable();
@@ -405,12 +322,12 @@ const startNavigationTestServer = async () => {
 };
 
 test("redacts a saved-profile baseline failure with its closed diagnostic", async () => {
-  const fake = makeProfileNavigationFakePage(
+  const browser = makeProfileNavigationBrowser(
     "https://account-navigation.example.test",
     "saved-profile-baseline"
   );
-  const failure = await verifyProfileNavigation(
-    fake.page,
+  const failure = await verifyProfileNavigationInBrowser(
+    browser,
     "https://account-navigation.example.test"
   ).then(
     () => undefined,
@@ -421,12 +338,12 @@ test("redacts a saved-profile baseline failure with its closed diagnostic", asyn
 });
 
 test("names the section selection stage and failure kind without the private cause", async () => {
-  const fake = makeProfileNavigationFakePage(
+  const browser = makeProfileNavigationBrowser(
     "https://account-navigation.example.test",
     "profile-handler-wait"
   );
-  const failure = await verifyProfileNavigation(
-    fake.page,
+  const failure = await verifyProfileNavigationInBrowser(
+    browser,
     "https://account-navigation.example.test"
   ).then(
     () => undefined,

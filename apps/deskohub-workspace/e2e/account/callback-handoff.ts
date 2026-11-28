@@ -3,6 +3,7 @@ import { getAccountPath } from "@/features/account/routes";
 import type { Locale } from "@/features/i18n";
 import { parseSameOriginPath } from "@/shared/utils/same-origin-path";
 import { workspaceE2ETimeouts } from "../timeouts";
+import { holdsVirtualAuthenticator } from "../virtual-authenticator";
 import {
   type CallbackDocumentReview,
   callbackDocumentReviewViewport,
@@ -11,10 +12,13 @@ import {
 import { isExactCallbackUrl, signedInCallbackCopy } from "./callback-url";
 import {
   type AccountReviewDestination,
+  type AccountReviewLocator,
+  type AccountReviewPage,
   type BoundedLocatorOperation,
   type CallbackHandoffReviewTarget,
   captureCallbackHandoffReview,
   persistCallbackDocumentReview,
+  type ReviewRouteHandler,
   showsSignedInCallbackCopy,
 } from "./review-screenshots";
 
@@ -40,7 +44,46 @@ const callbackLoadingSelector =
 const callbackHandoffFailureMessage =
   "Account callback handoff verification failed";
 
-type DestinationRouteHandler = Parameters<Playwright.Page["route"]>[1];
+type DestinationRequest = Pick<
+  Playwright.Request,
+  "headers" | "isNavigationRequest" | "method" | "resourceType" | "url"
+> & { frame(): object };
+
+type DestinationRouteHandler = ReviewRouteHandler<DestinationRequest>;
+type DestinationRoute = Parameters<DestinationRouteHandler>[0];
+type DestinationRouteMatcher = (url: URL) => boolean;
+
+type CallbackLoadingElement = {
+  evaluate(
+    check: (element: HTMLElement | SVGElement) => boolean
+  ): Promise<boolean>;
+};
+
+export type CallbackHandoffLocator = AccountReviewLocator & {
+  elementHandle(options: {
+    timeout: number;
+  }): Promise<CallbackLoadingElement | null>;
+};
+
+export type CallbackHandoffPage<Locator extends CallbackHandoffLocator> =
+  AccountReviewPage<Locator> & {
+    mainFrame(): object;
+    route(
+      matcher: DestinationRouteMatcher,
+      handler: DestinationRouteHandler
+    ): Promise<unknown>;
+    unroute(
+      matcher: DestinationRouteMatcher,
+      handler: DestinationRouteHandler
+    ): Promise<void>;
+  };
+
+type PrepareDocumentReview = (
+  baseOrigin: string,
+  expectation: CallbackHandoffExpectation,
+  viewport: Playwright.ViewportSize | null,
+  options: { deadline: number; signal: AbortSignal }
+) => Promise<CallbackDocumentReview>;
 
 const callbackHandoffFailure = () => new Error(callbackHandoffFailureMessage);
 
@@ -104,7 +147,7 @@ const hasCallbackPrefetchSignal = (headers: Record<string, string>): boolean =>
  * Playwright page-DOM protocol operation. The legitimate RSC data fetch for
  * the callback page keeps the locator-based review flow.
  */
-const isMainDocumentRequest = (request: Playwright.Request): boolean =>
+const isMainDocumentRequest = (request: DestinationRequest): boolean =>
   request.resourceType() === "document" && request.headers().rsc === undefined;
 
 /**
@@ -116,8 +159,8 @@ const isMainDocumentRequest = (request: Playwright.Request): boolean =>
  * contradictory shapes such as an RSC navigation document.
  */
 const isQualifyingDestinationRequest = (
-  request: Playwright.Request,
-  page: Playwright.Page
+  request: DestinationRequest,
+  page: Pick<CallbackHandoffPage<CallbackHandoffLocator>, "mainFrame">
 ): boolean => {
   const headers = request.headers();
   if (headers.rsc !== undefined) {
@@ -144,7 +187,7 @@ const isQualifyingDestinationRequest = (
  * The path and query a qualifying request leaves for. The client router's RSC
  * fetch appends its `_rsc` cache key, which is not part of the destination.
  */
-const requestDestination = (request: Playwright.Request): string => {
+const requestDestination = (request: DestinationRequest): string => {
   const url = new URL(request.url());
   if (request.headers().rsc === undefined)
     return `${url.pathname}${url.search}`;
@@ -157,12 +200,15 @@ const requestDestination = (request: Playwright.Request): string => {
 };
 
 const waitForCallbackLoading = async (
-  page: Playwright.Page,
+  page: Pick<
+    CallbackHandoffPage<CallbackHandoffLocator>,
+    "url" | "locator" | "getByRole"
+  >,
   baseOrigin: string,
   expectation: CallbackHandoffExpectation,
   deadline: number,
   signal: AbortSignal
-): Promise<Playwright.ElementHandle<HTMLElement | SVGElement>> => {
+): Promise<CallbackLoadingElement> => {
   if (!isExactCallbackUrl(page, baseOrigin, expectation))
     throw callbackHandoffFailure();
 
@@ -267,7 +313,7 @@ const waitForCallbackLoading = async (
 };
 
 const loadingElementIsVisible = async (
-  loadingElement: Playwright.ElementHandle<HTMLElement | SVGElement>
+  loadingElement: CallbackLoadingElement
 ): Promise<boolean> =>
   loadingElement.evaluate((element) => {
     if (!element.isConnected) return false;
@@ -290,10 +336,38 @@ const loadingElementIsVisible = async (
  * review screenshot and its capture viewport depend on the review screenshot
  * opt-in.
  */
-export const withCallbackHandoffReview = async (
+export const withCallbackHandoffReview = (
   page: Playwright.Page,
   destination: AccountReviewDestination,
   runCase: () => Promise<void>,
+  expectation?: CallbackHandoffExpectation
+): Promise<void> =>
+  reviewCallbackHandoff(
+    page,
+    destination,
+    runCase,
+    (...args) =>
+      prepareCallbackDocumentReview(
+        {
+          url: () => page.url(),
+          viewportSize: () => page.viewportSize(),
+          setViewportSize: (size) => page.setViewportSize(size),
+          addInitScript: (source) => page.addInitScript(source),
+          openSession: () => page.context().newCDPSession(page),
+          holdsVirtualAuthenticator: () => holdsVirtualAuthenticator(page),
+        },
+        ...args
+      ),
+    expectation
+  );
+
+export const reviewCallbackHandoff = async <
+  Locator extends CallbackHandoffLocator,
+>(
+  page: CallbackHandoffPage<Locator>,
+  destination: AccountReviewDestination,
+  runCase: () => Promise<void>,
+  prepareDocumentReview: PrepareDocumentReview,
   expectation: CallbackHandoffExpectation = accountCallbackHandoff
 ): Promise<void> => {
   const { baseUrl, screenshots: captureEnabled } = destination;
@@ -322,7 +396,7 @@ export const withCallbackHandoffReview = async (
   let runCaseFailure: unknown;
   let routeCleanupOwed = false;
   let firstHandlerPromise: Promise<void> | undefined;
-  let qualifyingRoute: Playwright.Route | undefined;
+  let qualifyingRoute: DestinationRoute | undefined;
   let cleanupDeadline: number | undefined;
   let continuationPromise: Promise<void> | undefined;
   let documentReview: CallbackDocumentReview | undefined;
@@ -333,7 +407,7 @@ export const withCallbackHandoffReview = async (
     return cleanupDeadline;
   };
 
-  const continueImmediately = (route: Playwright.Route) => {
+  const continueImmediately = (route: DestinationRoute) => {
     const handlerPromise = waitForCallbackOperation(
       () => route.continue(),
       Date.now() + workspaceE2ETimeouts.cleanupAction
@@ -343,7 +417,7 @@ export const withCallbackHandoffReview = async (
     return handlerPromise;
   };
 
-  const continueQualifyingRoute = (route: Playwright.Route) => {
+  const continueQualifyingRoute = (route: DestinationRoute) => {
     continuationPromise ??= waitForCallbackOperation(
       () => route.continue(),
       cleanupDeadline ?? Date.now() + workspaceE2ETimeouts.cleanupAction
@@ -451,8 +525,7 @@ export const withCallbackHandoffReview = async (
     );
     // The document review adapter is prepared before the case can navigate so
     // its init script and CDP binding exist before the held document request.
-    documentReview = await prepareCallbackDocumentReview(
-      page,
+    documentReview = await prepareDocumentReview(
       baseUrl,
       expectation,
       captureEnabled ? { ...callbackDocumentReviewViewport } : null,

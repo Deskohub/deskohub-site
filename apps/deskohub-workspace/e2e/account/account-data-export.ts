@@ -68,8 +68,13 @@ const controlStates = new Set(["idle", "pending", "delivered", "error"]);
 const readSchemaVersion = (manifest: Uint8Array): number | undefined => {
   try {
     const parsed: unknown = JSON.parse(strFromU8(manifest));
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const { schemaVersion } = parsed as { readonly schemaVersion?: unknown };
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("schemaVersion" in parsed)
+    )
+      return undefined;
+    const { schemaVersion } = parsed;
     return typeof schemaVersion === "number" ? schemaVersion : undefined;
   } catch {
     return undefined;
