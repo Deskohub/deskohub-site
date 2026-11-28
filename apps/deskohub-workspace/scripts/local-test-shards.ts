@@ -199,7 +199,7 @@ const waitUntilReady = async (
 
 const removeContainers = async (containers: ReadonlyArray<string>) => {
   if (containers.length === 0) return;
-  await runCommand(["docker", "rm", "--force", ...containers], {
+  await runCommand(["docker", "rm", "--force", "--volumes", ...containers], {
     timeoutMs: 60_000,
   });
 };
