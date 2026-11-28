@@ -281,9 +281,11 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
     }),
   ];
   const reservations: DotyposReservation[] = [
-    makeReservation("open-space-table", 2),
-    makeReservation("provider-room-id", 1),
-    makeReservation("reserved-desk-table", 1, { status: "CANCELLED" }),
+    makeReservation("open-space-booking", "open-space-table", 2),
+    makeReservation("meeting-room-booking", "provider-room-id", 1),
+    makeReservation("reserved-desk-booking", "reserved-desk-table", 1, {
+      status: "CANCELLED",
+    }),
   ];
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
@@ -484,8 +486,8 @@ test("does not add reservation usage from non-overlapping dates", () => {
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 5),
-      makeReservation("open-space-table", 5, {
+      makeReservation("first-day-booking", "open-space-table", 5),
+      makeReservation("second-day-booking", "open-space-table", 5, {
         endDate: "2099-08-05T18:00:00+00:00",
         startDate: "2099-08-05T08:00:00+00:00",
       }),
@@ -508,8 +510,8 @@ test("fails when overlapping reservations jointly exhaust run and cleanup headro
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 8),
-      makeReservation("open-space-table", 8, {
+      makeReservation("all-day-booking", "open-space-table", 8),
+      makeReservation("overlapping-booking", "open-space-table", 8, {
         endDate: "2099-08-03T17:00:00+00:00",
         startDate: "2099-08-03T09:00:00+00:00",
       }),
@@ -537,15 +539,15 @@ test("adds no occupancy for out-of-interval and boundary-touching reservations",
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 32, {
+      makeReservation("before-interval-booking", "open-space-table", 32, {
         endDate: "2099-07-28T18:00:00+00:00",
         startDate: "2099-07-28T08:00:00+00:00",
       }),
-      makeReservation("open-space-table", 32, {
+      makeReservation("ending-at-start-booking", "open-space-table", 32, {
         endDate: "2099-08-01T00:00:00+00:00",
         startDate: "2099-07-31T08:00:00+00:00",
       }),
-      makeReservation("open-space-table", 32, {
+      makeReservation("starting-at-end-booking", "open-space-table", 32, {
         endDate: "2099-09-02T08:00:00+00:00",
         startDate: "2099-09-01T00:00:00+00:00",
       }),
@@ -567,7 +569,9 @@ test("ignores cancelled reservations in capacity accounting", () => {
   const report = makeWorkspaceE2ECapacityReport({
     from: new Date("2099-08-01T00:00:00.000Z"),
     reservations: [
-      makeReservation("open-space-table", 32, { status: "CANCELLED" }),
+      makeReservation("cancelled-booking", "open-space-table", 32, {
+        status: "CANCELLED",
+      }),
     ],
     tables: [makeTable("open-space-table", ["cowork:open-space"], 32)],
     to: new Date("2099-09-01T00:00:00.000Z"),
@@ -681,12 +685,12 @@ const makeTable = (
   });
 
 const makeReservation = (
+  id: string,
   tableId: string,
   seats: number,
   overrides: Partial<typeof DotyposReservationSchema.Encoded> = {}
 ): DotyposReservation =>
   Schema.decodeSync(DotyposReservationSchema)({
-    id: `reservation-${tableId}-${seats}`,
     _branchId: "testing-branch",
     _cloudId: "testing-cloud",
     _tableId: tableId,
@@ -695,4 +699,5 @@ const makeReservation = (
     startDate: "2099-08-03T08:00:00+00:00",
     status: "CONFIRMED",
     ...overrides,
+    id,
   });

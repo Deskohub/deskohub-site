@@ -72,13 +72,14 @@ test("reports fresh E2E reservations without cancelling them", async () => {
           reservation("reservation-fresh"),
         ]),
       loadReservation: (reservationId) =>
-        Effect.succeed({
-          customer:
+        Effect.succeed(
+          reservationDetails(
+            reservationId,
             reservationId === "reservation-fresh"
-              ? customer({ lastName: `${timestamp} 01` })
-              : customer(),
-          reservation: reservation(reservationId),
-        }),
+              ? { lastName: `${timestamp} 01` }
+              : {}
+          )
+        ),
       waitForCancellationConvergence: () => Effect.void,
     })
   );
@@ -117,10 +118,7 @@ test("overlaps every detail read and retains all read failures", async () => {
                     message: "detail read failed",
                   })
                 )
-              : Effect.succeed({
-                  customer: customer(),
-                  reservation: reservation(reservationId),
-                })
+              : Effect.succeed(reservationDetails(reservationId))
           )
         ),
       waitForCancellationConvergence: () => Effect.void,
@@ -167,10 +165,7 @@ test("overlaps independent cancellations and retains every failure", async () =>
           reservation("reservation-3"),
         ]),
       loadReservation: (reservationId) =>
-        Effect.succeed({
-          customer: customer(),
-          reservation: reservation(reservationId),
-        }),
+        Effect.succeed(reservationDetails(reservationId)),
       waitForCancellationConvergence,
     })
   );
@@ -197,10 +192,7 @@ test("waits for successful cancellation convergence", async () => {
       listActiveReservations: () =>
         Effect.succeed([reservation("reservation-1")]),
       loadReservation: (reservationId) =>
-        Effect.succeed({
-          customer: customer(),
-          reservation: reservation(reservationId),
-        }),
+        Effect.succeed(reservationDetails(reservationId)),
       waitForCancellationConvergence,
     })
   );
@@ -225,15 +217,32 @@ const customer = (overrides: Partial<Customer> = {}): Customer => ({
   ...overrides,
 });
 
-const reservation = (id: string): Reservation => ({
-  _branchId: "testing-branch",
-  _cloudId: "testing-cloud",
-  endDate: "2099-08-03T18:00:00+00:00",
-  id,
-  seats: "1",
-  startDate: "2099-08-03T08:00:00+00:00",
-  status: "CONFIRMED",
-});
+const reservation = (id: string) =>
+  ({
+    _branchId: "testing-branch",
+    _cloudId: "testing-cloud",
+    _customerId: `customer-for-${id}`,
+    endDate: "2099-08-03T18:00:00+00:00",
+    id,
+    seats: "1",
+    startDate: "2099-08-03T08:00:00+00:00",
+    status: "CONFIRMED",
+  }) satisfies Reservation;
+
+const reservationDetails = (
+  reservationId: string,
+  overrides: Pick<Partial<Customer>, "lastName"> = {}
+) => {
+  const booked = reservation(reservationId);
+  return {
+    customer: customer({
+      ...overrides,
+      email: resendSimulatorAddress("delivered", booked._customerId),
+      id: booked._customerId,
+    }),
+    reservation: booked,
+  };
+};
 
 const makeBarrier = (expectedParticipants: number) => {
   let active = 0;
