@@ -511,8 +511,63 @@ const isReservationContactStepQuery = (search: string): boolean => {
  * grammar of its landing, so it fails closed without one; other targets allow
  * an empty query or their own query grammar.
  */
+type ReviewPageUrl = Pick<Playwright.Page, "url">;
+
+export type AccountReviewLocator = Pick<
+  Playwright.Locator,
+  "boundingBox" | "count" | "textContent" | "waitFor"
+> & {
+  first(): Pick<Playwright.Locator, "waitFor">;
+  locator(selector: string): AccountReviewLocator;
+};
+
+type ReviewLocatorPage = {
+  locator(selector: string): AccountReviewLocator;
+  getByRole(
+    role: Parameters<Playwright.Page["getByRole"]>[0],
+    options?: Parameters<Playwright.Page["getByRole"]>[1]
+  ): AccountReviewLocator;
+};
+
+type AccountReviewScreenshotOptions<Locator> = Omit<
+  Playwright.PageScreenshotOptions,
+  "mask"
+> & { mask?: Locator[] };
+
+export type AccountReviewPage<Locator extends AccountReviewLocator> = Pick<
+  Playwright.Page,
+  "url" | "viewportSize" | "setViewportSize"
+> &
+  Omit<ReviewLocatorPage, "locator"> & {
+    locator(selector: string): Locator;
+    evaluate(waitForFonts: () => Promise<void>): Promise<void>;
+    screenshot(
+      options: AccountReviewScreenshotOptions<Locator>
+    ): Promise<Buffer>;
+  };
+
+export type ReviewRouteHandler<Request> = (
+  route: Pick<Playwright.Route, "continue">,
+  request: Request
+) => Promise<void>;
+
+type SignInPendingRequest = Pick<Playwright.Request, "method">;
+
+type SignInPendingReviewPage<Locator extends AccountReviewLocator> =
+  AccountReviewPage<Locator> & {
+    route(
+      url: string,
+      handler: ReviewRouteHandler<SignInPendingRequest>,
+      options: { times: number }
+    ): Promise<unknown>;
+    unroute(
+      url: string,
+      handler: ReviewRouteHandler<SignInPendingRequest>
+    ): Promise<void>;
+  };
+
 const validateAccountReviewPage = (
-  page: Playwright.Page,
+  page: ReviewPageUrl,
   baseUrl: string,
   target: ReviewTarget,
   metadata: AccountReviewTargetMetadata,
@@ -549,8 +604,8 @@ const validateAccountReviewPage = (
   }
 };
 
-const captureAccountReviewPixels = async (
-  page: Playwright.Page,
+const captureAccountReviewPixels = async <Locator extends AccountReviewLocator>(
+  page: AccountReviewPage<Locator>,
   baseUrl: string,
   target: ReviewTarget,
   metadata: AccountReviewTargetMetadata,
@@ -600,7 +655,7 @@ export type BoundedLocatorOperation = <A>(
  * trimmed text of the landing's locale and return.
  */
 export const showsSignedInCallbackCopy = async (
-  card: Playwright.Locator,
+  card: AccountReviewLocator,
   landing: CallbackLanding,
   bounded: BoundedLocatorOperation
 ): Promise<boolean> => {
@@ -621,7 +676,7 @@ export const showsSignedInCallbackCopy = async (
 };
 
 const validateSignedInCallbackCapture = async (
-  page: Playwright.Page,
+  page: ReviewLocatorPage,
   landing: CallbackLanding,
   deadline: number,
   signal?: AbortSignal
@@ -662,7 +717,6 @@ const validateSignedInCallbackCapture = async (
  * operations; receipt-backed callers supply the adapter validator instead.
  */
 type CallbackCaptureValidator = (
-  page: Playwright.Page,
   deadline: number,
   signal?: AbortSignal
 ) => Promise<void> | void;
@@ -677,15 +731,16 @@ type HeldCallbackReview = {
 };
 
 const locatorHeldCallbackReview = (
+  page: ReviewLocatorPage,
   landing: CallbackLanding
 ): HeldCallbackReview => ({
   landing,
-  validate: (page, deadline, signal) =>
+  validate: (deadline, signal) =>
     validateSignedInCallbackCapture(page, landing, deadline, signal),
 });
 
 const persistAccountReview = async (
-  page: Playwright.Page,
+  page: ReviewPageUrl,
   baseUrl: string,
   target: ReviewTarget,
   metadata: AccountReviewTargetMetadata,
@@ -707,7 +762,7 @@ const persistAccountReview = async (
     if (isCallbackHandoffReviewTarget(target)) {
       if (!heldCallback) throw accountReviewCaptureFailure();
       try {
-        await heldCallback.validate(page, deadline, signal);
+        await heldCallback.validate(deadline, signal);
       } catch {
         throw accountReviewCaptureFailure();
       }
@@ -742,8 +797,10 @@ const persistAccountReview = async (
  * before touching the page or the artifact directory when the destination does
  * not capture review screenshots.
  */
-const captureAccountReviewWithMetadata = async (
-  page: Playwright.Page,
+const captureAccountReviewWithMetadata = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: AccountReviewPage<Locator>,
   baseUrl: string,
   target: ReviewTarget,
   metadata: AccountReviewTargetMetadata,
@@ -820,7 +877,7 @@ const captureAccountReviewWithMetadata = async (
  * no generic public bypass.
  */
 export const persistCallbackDocumentReview = async (
-  page: Playwright.Page,
+  page: ReviewPageUrl,
   { baseUrl, screenshots }: AccountReviewDestination,
   target: CallbackHandoffReviewTarget,
   landing: CallbackLanding,
@@ -859,8 +916,10 @@ export const persistCallbackDocumentReview = async (
  * operations, checking the page against the exact `landing`: its callback
  * URL grammar and the card's localized label, heading, and body.
  */
-export const captureCallbackHandoffReview = async (
-  page: Playwright.Page,
+export const captureCallbackHandoffReview = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: AccountReviewPage<Locator>,
   { baseUrl, screenshots }: AccountReviewDestination,
   target: CallbackHandoffReviewTarget,
   landing: CallbackLanding,
@@ -876,7 +935,7 @@ export const captureCallbackHandoffReview = async (
     target,
     metadata,
     options,
-    locatorHeldCallbackReview(landing)
+    locatorHeldCallbackReview(page, landing)
   );
 };
 
@@ -886,8 +945,10 @@ export const captureCallbackHandoffReview = async (
  * exact return target, so it is captured only through
  * `captureCallbackHandoffReview` and fails closed here.
  */
-export const captureAccountReview = async (
-  page: Playwright.Page,
+export const captureAccountReview = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: AccountReviewPage<Locator>,
   { baseUrl, screenshots }: AccountReviewDestination,
   target: AccountReviewTarget,
   options: AccountReviewCaptureOptions = {}
@@ -902,13 +963,15 @@ export const captureAccountReview = async (
     metadata,
     options,
     target === "callback-signed-in-desktop"
-      ? locatorHeldCallbackReview({ locale: "en-US" })
+      ? locatorHeldCallbackReview(page, { locale: "en-US" })
       : undefined
   );
 };
 
-export const captureReservationStatusReview = async (
-  page: Playwright.Page,
+export const captureReservationStatusReview = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: AccountReviewPage<Locator>,
   { baseUrl, screenshots }: AccountReviewDestination,
   target: ReservationStatusReviewTarget,
   reservationId: WorkspaceReservationId,
@@ -931,7 +994,7 @@ export const captureReservationStatusReview = async (
 };
 
 const waitForDocumentFonts = async (
-  page: Playwright.Page,
+  page: Pick<AccountReviewPage<AccountReviewLocator>, "evaluate">,
   deadline: number,
   signal?: AbortSignal
 ): Promise<void> => {
@@ -946,8 +1009,10 @@ const waitForDocumentFonts = async (
  * Holds the sign-in POST only to photograph the pending form, so without the
  * review screenshot opt-in the case runs unwrapped.
  */
-export const withSignInPendingReview = async (
-  page: Playwright.Page,
+export const withSignInPendingReview = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: SignInPendingReviewPage<Locator>,
   { baseUrl, screenshots }: AccountReviewDestination,
   runCase: () => Promise<void>
 ): Promise<void> => {
@@ -967,7 +1032,7 @@ export const withSignInPendingReview = async (
     cleanupDeadline ??= Date.now() + workspaceE2ETimeouts.cleanupAction;
     return cleanupDeadline;
   };
-  const handleMagicLinkRoute: Parameters<Playwright.Page["route"]>[1] = (
+  const handleMagicLinkRoute: ReviewRouteHandler<SignInPendingRequest> = (
     route,
     request
   ) => {
@@ -1044,10 +1109,11 @@ export const withSignInPendingReview = async (
       } catch {
         wrapperFailed = true;
       }
-      if (fullHandlerPromise) {
+      const handlerToAwait = fullHandlerPromise;
+      if (handlerToAwait) {
         try {
           await waitForAccountReviewOperation(
-            () => fullHandlerPromise as Promise<void>,
+            () => handlerToAwait,
             sharedCleanupDeadline
           );
         } catch {
@@ -1098,15 +1164,17 @@ const skipLanguagePreferenceReview: LanguagePreferenceReviewCapture =
  * photograph. Callers own the synthetic context; this helper only captures
  * the allowlisted PNGs.
  */
-export const withLanguagePreferenceReview = async (
-  page: Playwright.Page,
+export const withLanguagePreferenceReview = async <
+  Locator extends AccountReviewLocator,
+>(
+  page: AccountReviewPage<Locator>,
   review: AccountReviewDestination,
   runCase: (capture: LanguagePreferenceReviewCapture) => Promise<void>
 ): Promise<void> => {
   if (!review.screenshots) return runCase(skipLanguagePreferenceReview);
 
   let reviewFailed = false;
-  const capturedStages = new Set<LanguagePreferenceReviewStage>();
+  const capturedStages = new Set<string>();
 
   const captureStage: LanguagePreferenceReviewCapture = async (stage) => {
     if (capturedStages.has(stage)) {
@@ -1130,7 +1198,7 @@ export const withLanguagePreferenceReview = async (
 
   if (
     Object.keys(languagePreferenceReviewTargetByStage).some(
-      (stage) => !capturedStages.has(stage as LanguagePreferenceReviewStage)
+      (stage) => !capturedStages.has(stage)
     )
   ) {
     reviewFailed = true;

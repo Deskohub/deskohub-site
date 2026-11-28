@@ -5,11 +5,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
-import type { Page } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 import { eq } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { accountRoleGrants } from "@/db/schema/account-role-grants";
 import { authSession, authUser } from "@/db/schema/auth";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { removeSyntheticAuthUser } from "../account/auth-rows";
 import { readWorkspaceE2EAccountJournal } from "../account/journal";
@@ -40,13 +41,13 @@ describe.skipIf(!testDatabase)(
         effect.pipe(Effect.provideService(E2EDatabase, E2EDatabase.of({ db })))
       );
 
-    const readRows = (accountId: string) =>
+    const readRows = (accountId: CustomerAccountId) =>
       Effect.runPromise(
         Effect.all({
           grants: db
             .select({ role: accountRoleGrants.role })
             .from(accountRoleGrants)
-            .where(eq(accountRoleGrants.accountId, accountId as never)),
+            .where(eq(accountRoleGrants.accountId, accountId)),
           sessions: db
             .select({ id: authSession.id })
             .from(authSession)
@@ -84,20 +85,13 @@ describe.skipIf(!testDatabase)(
         testEmailAddress(`delivered+${runId}-pg-admin`)
       );
 
-      const cookies: unknown[] = [];
-      // Only the page's context is driven, to add the seeded cookie.
-      const session = {
-        use: (_label: string, drive: (page: Page) => Promise<unknown>) =>
-          Effect.promise(() =>
-            drive({
-              context: () => ({
-                addCookies: async (added: readonly unknown[]) => {
-                  cookies.push(...added);
-                },
-              }),
-            } as unknown as Page)
-          ),
-      } as unknown as E2EBrowserSession;
+      const cookies: Parameters<BrowserContext["addCookies"]>[0][number][] = [];
+      const session: Pick<E2EBrowserSession, "addCookies"> = {
+        addCookies: (_label, added) =>
+          Effect.sync(() => {
+            cookies.push(...added);
+          }),
+      };
       await provide(identities.signIn(administrator, { origin, session }));
       expect(cookies).toEqual([
         {

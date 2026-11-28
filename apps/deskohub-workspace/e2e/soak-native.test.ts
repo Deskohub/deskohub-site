@@ -44,10 +44,11 @@ test("the real root span ends before the E2E closing hook, without a remote expo
     }
   );
   expect(Exit.isSuccess(exit)).toBe(true);
-  expect(receipt?.service).toBe("deskohub-workspace-e2e");
-  expect(receipt?.outcome).toBe("passed");
-  expect(receipt?.startedAt).toMatch(/\.\d{9}Z$/);
-  expect(receipt!.startedAt < receipt!.completedAt).toBe(true);
+  if (!receipt) throw new Error("Expected a completed run receipt");
+  expect(receipt.service).toBe("deskohub-workspace-e2e");
+  expect(receipt.outcome).toBe("passed");
+  expect(receipt.startedAt).toMatch(/\.\d{9}Z$/);
+  expect(receipt.startedAt < receipt.completedAt).toBe(true);
   expect(() =>
     runtime.capture.receipt({ ...environment, GITHUB_RUN_ATTEMPT: 2 })
   ).toThrow();
@@ -155,7 +156,8 @@ test("the configured OTel tracer's actual native timestamps equal the receipt", 
       .getFinishedSpans()
       .filter(({ name }) => name === "e2e.run");
     expect(roots).toHaveLength(1);
-    const root = roots[0]!;
+    const [root] = roots;
+    if (!root) throw new Error("Expected an exported run span");
     const receipt = runtime.capture.receipt(environment);
     expect(receipt.startedAt).toBe(
       nativeTimestamp(

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
@@ -6,7 +7,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { renderMagicLinkEmail } from "../../features/account/backend/auth/magic-link-email";
 import { createCensoredOtelSpanExporter } from "../../shared/backend/logging/censorship";
@@ -38,7 +39,7 @@ const config = getAccountE2EConfig(
     WORKSPACE_E2E_VERCEL_PROJECT: "workspace-preview-project",
     WORKSPACE_E2E_VERCEL_TOKEN: "vercel-log-read-token",
   }),
-  Schema.decodeUnknownSync(workspaceE2ERunIdSchema)("1234567890-2")
+  workspaceE2ERunIdSchema.make("1234567890-2")
 );
 
 const recipient = makeWorkspaceE2EAccountRecipient(config, "retrieval");
@@ -100,10 +101,7 @@ const makeHttpHarness = (
 ) => {
   const requests: Request[] = [];
   let historyCall = 0;
-  const fetch: typeof globalThis.fetch = async (
-    input: URL | RequestInfo,
-    init?: RequestInit
-  ) => {
+  const fetch = async (input: URL | RequestInfo, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     requests.push(request.clone());
     const url = new URL(request.url);
@@ -127,7 +125,16 @@ const makeHttpHarness = (
     return new Response("synthetic private route response", { status: 404 });
   };
   const layer = FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(fetch, {
+          preconnect: () => {
+            throw new Error("unexpected Vercel preconnect");
+          },
+        })
+      )
+    )
   );
   return { layer, requests };
 };
@@ -448,10 +455,11 @@ describe("workspace e2e Vercel log retrieval", () => {
       operation: "query Vercel preview runtime logs",
     });
     expect(requests).toHaveLength(2);
-    expect((failure as { cause?: unknown }).cause).toBeUndefined();
+    assert(failure instanceof Error);
+    expect(failure.cause).toBeUndefined();
     const failureText = [
       String(failure),
-      (failure as { message?: string }).message,
+      failure.message,
       JSON.stringify(failure),
     ].join(" ");
     expect(failureText).not.toContain(privateBody);
@@ -622,7 +630,8 @@ describe("workspace e2e Vercel log retrieval", () => {
       message: "query Vercel preview runtime logs failed (request-failed)",
       operation: "query Vercel preview runtime logs",
     });
-    expect((failure as { cause?: unknown }).cause).toBeUndefined();
+    assert(failure instanceof Error);
+    expect(failure.cause).toBeUndefined();
     expect(JSON.stringify(failure)).not.toContain(privateDetail);
   });
 

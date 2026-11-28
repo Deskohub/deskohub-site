@@ -1,10 +1,10 @@
 import {
-  type DotyposCustomerId,
-  type DotyposReservationId,
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
   DotyposService,
 } from "@deskohub/dotypos";
 import type { Customer } from "@deskohub/dotypos/generated";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import type { DatasourceConfig } from "../config";
 import {
   toWorkspaceE2EError,
@@ -32,6 +32,27 @@ import {
   writeWorkspaceE2EAccountJournal,
 } from "./journal";
 import { removeWorkspaceE2EReferralRows } from "./referral-fixture";
+
+// Journal IDs name exact resources. Reject an invalid ID instead of trimming
+// it and potentially acting on a different resource.
+const JournalCustomerId = Schema.toType(DotyposCustomerIdSchema);
+const JournalReservationId = Schema.toType(DotyposReservationIdSchema);
+const readJournalCustomerId = Schema.decodeUnknownEffect(JournalCustomerId);
+const readJournalReservationId =
+  Schema.decodeUnknownEffect(JournalReservationId);
+const readJournalReservationIds = Schema.decodeUnknownEffect(
+  Schema.Array(JournalReservationId)
+);
+const readJournalReferralRowIds = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    syntheticDotyposCustomerIds: Schema.Array(JournalCustomerId),
+    syntheticDotyposReservationIds: Schema.Array(JournalReservationId),
+  })
+);
+const invalidJournalIds = () =>
+  workspaceE2EError("Invalid Dotypos resource ID in account journal", {
+    operation: "read synthetic account journal IDs",
+  });
 
 /**
  * The synthetic account resources an account identity journal records: the
@@ -106,12 +127,12 @@ export class WorkspaceE2EAccountResourceService extends Context.Service<
           ),
           readCustomerProfile: Effect.fn(
             "WorkspaceE2EAccountResourceService.readCustomerProfile"
-          )((customerId: string) =>
-            readSyntheticCustomerProfile(
-              datasourceConfig,
-              customerId as DotyposCustomerId
-            )
-          ),
+          )(function* (customerId: string) {
+            const id = yield* readJournalCustomerId(customerId).pipe(
+              Effect.mapError(invalidJournalIds)
+            );
+            return yield* readSyntheticCustomerProfile(datasourceConfig, id);
+          }),
           readJournal: Effect.fn(
             "WorkspaceE2EAccountResourceService.readJournal"
           )((ownerId: WorkspaceE2EAccountJournalOwnerId, directory?: string) =>
@@ -136,18 +157,15 @@ export class WorkspaceE2EAccountResourceService extends Context.Service<
           ),
           removeRows: Effect.fn(
             "WorkspaceE2EAccountResourceService.removeRows"
-          )(
-            (input: {
-              readonly syntheticDotyposCustomerIds: readonly string[];
-              readonly syntheticDotyposReservationIds: readonly string[];
-            }) =>
-              removeWorkspaceE2EReferralRows({
-                syntheticDotyposCustomerIds:
-                  input.syntheticDotyposCustomerIds as DotyposCustomerId[],
-                syntheticDotyposReservationIds:
-                  input.syntheticDotyposReservationIds as DotyposReservationId[],
-              }).pipe(withDatabase)
-          ),
+          )(function* (input: {
+            readonly syntheticDotyposCustomerIds: readonly string[];
+            readonly syntheticDotyposReservationIds: readonly string[];
+          }) {
+            const ids = yield* readJournalReferralRowIds(input).pipe(
+              Effect.mapError(invalidJournalIds)
+            );
+            yield* removeWorkspaceE2EReferralRows(ids).pipe(withDatabase);
+          }),
           writeJournal: Effect.fn(
             "WorkspaceE2EAccountResourceService.writeJournal"
           )((journal: WorkspaceE2EAccountJournal, directory?: string) =>
@@ -176,10 +194,11 @@ const readReservationOwnerEmail = (
   reservationId: string
 ): Effect.Effect<Option.Option<string | null>, WorkspaceE2EError> =>
   Effect.gen(function* () {
-    const dotypos = yield* DotyposService;
-    const details = yield* dotypos.getReservation(
-      reservationId as DotyposReservationId
+    const id = yield* readJournalReservationId(reservationId).pipe(
+      Effect.mapError(invalidJournalIds)
     );
+    const dotypos = yield* DotyposService;
+    const details = yield* dotypos.getReservation(id);
     return Option.map(details, ({ customer }) => customer.email ?? null);
   }).pipe(
     Effect.provide(getDotyposLayer(datasourceConfig)),
@@ -194,9 +213,9 @@ const cancelAndConvergeReservations = (
 ): Effect.Effect<void, WorkspaceE2EError> =>
   Effect.gen(function* () {
     if (reservationIds.length === 0) return;
-    const dotyposReservationIds = reservationIds.map(
-      (value) => value as DotyposReservationId
-    );
+    const dotyposReservationIds = yield* readJournalReservationIds(
+      reservationIds
+    ).pipe(Effect.mapError(invalidJournalIds));
     yield* Effect.forEach(
       dotyposReservationIds,
       (reservationId) =>
@@ -225,15 +244,12 @@ const expireAndConvergeProfile = (
   customerId: string
 ): Effect.Effect<void, WorkspaceE2EError> =>
   Effect.gen(function* () {
-    yield* expireSyntheticCustomerProfile(
-      datasourceConfig,
-      customerId as DotyposCustomerId
+    const id = yield* readJournalCustomerId(customerId).pipe(
+      Effect.mapError(invalidJournalIds)
     );
+    yield* expireSyntheticCustomerProfile(datasourceConfig, id);
     yield* pollUntil(
-      requireSyntheticCustomerProfile(
-        datasourceConfig,
-        customerId as DotyposCustomerId
-      ).pipe(
+      requireSyntheticCustomerProfile(datasourceConfig, id).pipe(
         Effect.map((customer) =>
           customer.expireDate != null &&
           new Date(customer.expireDate).getTime() <= Date.now()

@@ -32,7 +32,6 @@ import {
 import { withCallbackHandoffReview } from "./callback-handoff";
 import type { WorkspaceE2ESignInReturns } from "./cases";
 import {
-  type WorkspaceE2EAccountCaseId,
   workspaceE2EAccountCaseIds,
   workspaceE2EAccountCaseSkipReason,
 } from "./catalog";

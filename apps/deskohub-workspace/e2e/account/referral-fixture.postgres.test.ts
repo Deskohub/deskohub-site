@@ -17,6 +17,7 @@ import {
 import { authUser } from "@/db/schema/auth";
 import { customerAccounts } from "@/db/schema/customer-accounts";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { E2EDatabase } from "../integrations/database.service";
 import {
@@ -31,14 +32,16 @@ const runWithDatabase = <A, E>(effect: Effect.Effect<A, E, E2EDatabase>) =>
   effect.pipe(
     Effect.provideService(
       E2EDatabase,
-      E2EDatabase.of({ db: testDatabase!.db })
+      E2EDatabase.of({
+        db: requireValue(testDatabase, "disposable Postgres").db,
+      })
     ),
     Effect.runPromise
   );
 
 const readCustomerReservations = (customerId: string) =>
-  testDatabase!.db
-    .select()
+  requireValue(testDatabase, "disposable Postgres")
+    .db.select()
     .from(workspaceReservations)
     .where(
       eq(
@@ -66,8 +69,8 @@ describe.skipIf(!testDatabase)(
         seedWorkspaceE2EReferralOwner(owner)
       );
 
-      const [user] = await testDatabase!.db
-        .select({
+      const [user] = await requireValue(testDatabase, "disposable Postgres")
+        .db.select({
           deletionRequestedAt: authUser.deletionRequestedAt,
           email: authUser.email,
           emailVerified: authUser.emailVerified,
@@ -82,16 +85,19 @@ describe.skipIf(!testDatabase)(
         emailVerified: true,
         name: owner.name,
       });
-      const [ownerAccount] = await testDatabase!.db
-        .select({ dotyposCustomerId: customerAccounts.dotyposCustomerId })
+      const [ownerAccount] = await requireValue(
+        testDatabase,
+        "disposable Postgres"
+      )
+        .db.select({ dotyposCustomerId: customerAccounts.dotyposCustomerId })
         .from(customerAccounts)
         .where(
           eq(customerAccounts.id, customerAccountIdSchema.make(owner.accountId))
         )
         .pipe(Effect.runPromise);
       expect(ownerAccount).toEqual({ dotyposCustomerId: referrer });
-      const [code] = await testDatabase!.db
-        .select({ referrer: referralCodes.referrerDotyposCustomerId })
+      const [code] = await requireValue(testDatabase, "disposable Postgres")
+        .db.select({ referrer: referralCodes.referrerDotyposCustomerId })
         .from(referralCodes)
         .where(eq(referralCodes.promotionCodeId, promotionCodeId))
         .pipe(Effect.runPromise);
@@ -152,19 +158,32 @@ describe.skipIf(!testDatabase)(
         reservationState: "confirmed",
         paymentState: "paid",
       });
-      const [application] = await testDatabase!.db
-        .select({ paymentAttemptId: discountApplications.paymentAttemptId })
+      const [application] = await requireValue(
+        testDatabase,
+        "disposable Postgres"
+      )
+        .db.select({ paymentAttemptId: discountApplications.paymentAttemptId })
         .from(discountApplications)
         .where(
-          eq(discountApplications.workspaceReservationId, savingsBooking!.id)
+          eq(
+            discountApplications.workspaceReservationId,
+            requireValue(savingsBooking, "savings booking").id
+          )
         )
         .pipe(Effect.runPromise);
-      const [attempt] = await testDatabase!.db
-        .select({ reservationId: paymentAttempts.workspaceReservationId })
+      const [attempt] = await requireValue(testDatabase, "disposable Postgres")
+        .db.select({ reservationId: paymentAttempts.workspaceReservationId })
         .from(paymentAttempts)
-        .where(eq(paymentAttempts.id, application!.paymentAttemptId))
+        .where(
+          eq(
+            paymentAttempts.id,
+            requireValue(application, "discount application").paymentAttemptId
+          )
+        )
         .pipe(Effect.runPromise);
-      expect(attempt).toEqual({ reservationId: savingsBooking!.id });
+      expect(attempt).toEqual({
+        reservationId: requireValue(savingsBooking, "savings booking").id,
+      });
     });
   }
 );

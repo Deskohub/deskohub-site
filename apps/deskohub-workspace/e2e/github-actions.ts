@@ -5,7 +5,9 @@ const safeDiagnosticIdentifier = (value: string) =>
   /^[a-z0-9-]+$/.test(value) ? value : "invalid";
 
 export const formatWorkspaceE2EFailureAnnotation = (
-  diagnostic: WorkspaceE2EFailureDiagnostic
+  diagnostic: Omit<WorkspaceE2EFailureDiagnostic, "diagnosticCode"> & {
+    readonly diagnosticCode?: string;
+  }
 ) =>
   `::error title=Workspace E2E case failed::${[
     `case=${safeDiagnosticIdentifier(diagnostic.caseId)}`,

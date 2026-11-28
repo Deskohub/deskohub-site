@@ -3,8 +3,12 @@ import { describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { workspaceReservations } from "@/db/schema/workspace-reservations";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withWorkspaceE2ELocalReservationFixture } from "../checkout/local-reservation-fixture";
+import { assert } from "../runtime";
 import { E2EDatabase } from "./database.service";
 import { readRunOwnedReservationRows } from "./owned-reservations";
 
@@ -12,6 +16,7 @@ const database = await connectWorkspacePostgresTestDatabase();
 
 describe.skipIf(!database)("all owned reservation DB sources", () => {
   test("includes retained paid rows without a provider link or payment attempt, by author and by customer", async () => {
+    const testDatabase = requireTestDatabase(database);
     await Effect.runPromise(
       withWorkspaceE2ELocalReservationFixture((fixture) =>
         Effect.gen(function* () {
@@ -20,6 +25,7 @@ describe.skipIf(!database)("all owned reservation DB sources", () => {
             .select()
             .from(workspaceReservations)
             .where(eq(workspaceReservations.id, fixture.reservationId));
+          assert(row, "Expected the seeded reservation row");
           yield* db
             .update(workspaceReservations)
             .set({ paymentState: "paid", paidAt: Temporal.Now.instant() })
@@ -28,7 +34,7 @@ describe.skipIf(!database)("all owned reservation DB sources", () => {
           const authorRows = yield* readRunOwnedReservationRows({
             ...base,
             customerIds: [],
-            accountIds: [row!.authorAccountId],
+            accountIds: [row.authorAccountId],
           });
           const customerRows = yield* readRunOwnedReservationRows({
             ...base,
@@ -49,7 +55,7 @@ describe.skipIf(!database)("all owned reservation DB sources", () => {
             })
           ).toEqual([]);
         })
-      ).pipe(Effect.provideService(E2EDatabase, { db: database!.db }))
+      ).pipe(Effect.provideService(E2EDatabase, { db: testDatabase.db }))
     );
   });
 });

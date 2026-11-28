@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { Schema } from "effect";
 import { addRedaction } from "../redaction";
 import { judgeAgentEvalFacts } from "./judges";
 import { redactAgentEvalOutput, redactAgentEvalValue } from "./redaction";
@@ -73,8 +74,11 @@ describe("redactAgentEvalValue", () => {
     for (const sentinel of [reservationId, orderId, "access="]) {
       expect(text).not.toContain(sentinel);
     }
+    if (!Schema.is(Schema.JsonObject)(redacted)) {
+      throw new Error("Expected a redacted judge input object");
+    }
     expect(redacted.parameters).toEqual(judgeInput.parameters);
-    expect(redacted.records[0]).toMatchObject({ paid: true, seats: 1 });
+    expect(redacted.records).toMatchObject([{ paid: true, seats: 1 }]);
     expect(redacted.statusPage).toBeNull();
   });
 });

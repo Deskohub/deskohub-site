@@ -10,17 +10,21 @@ import {
   chromium,
   type Page,
 } from "@playwright/test";
-import { Cause, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import { sanitizeHarArtifact } from "./artifact-sanitization";
+import {
+  decodeArtifactJson,
+  sanitizeHarArtifact,
+} from "./artifact-sanitization";
 import { openPage } from "./browser";
 import type { OpenE2EBrowserSession } from "./browser-session";
-import type { DatasourceConfig } from "./config";
+import { unopenedE2EDatabase } from "./cases/e2e-fixtures.test-utils";
+import { getDatasourceConfig } from "./config";
 import { WorkspaceE2EHostedPaymentPermitServiceMock } from "./coordination/hosted-payment-permit.service.mock";
 import { WorkspaceE2EProviderVerificationPermitServiceMock } from "./coordination/provider-verification-permit.service.mock";
+import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import { runUntracedE2EEffect } from "./effect-edge";
 import { workspaceE2EError } from "./errors";
-import { E2EDatabase } from "./integrations/database.service";
 import { addRedaction } from "./redaction";
 import { WorkspaceE2ECleanupService } from "./services/cleanup";
 import {
@@ -138,10 +142,7 @@ const testTimeouts = (
   ...overrides,
 });
 
-const testDatasourceConfig = {} as DatasourceConfig;
-
-// Cases here own no checkout states, so cleanup never queries the database.
-const unusedDatabase = Layer.succeed(E2EDatabase, {} as E2EDatabase["Service"]);
+const testDatasourceConfig = getDatasourceConfig(makeTestE2EEnvironment());
 
 const suiteLayer = (
   observations: E2ETelemetryObservation[],
@@ -150,7 +151,7 @@ const suiteLayer = (
   Layer.mergeAll(
     makeE2ETelemetryMock(observations),
     cleanup,
-    unusedDatabase,
+    unopenedE2EDatabase,
     WorkspaceE2EHostedPaymentPermitServiceMock,
     WorkspaceE2EProviderVerificationPermitServiceMock
   );
@@ -223,36 +224,35 @@ const caseContext = (openSession: OpenE2EBrowserSession) =>
     session.use("read the context", async (page) => page.context())
   );
 
+const browserOpeningWith = (newContext: Browser["newContext"]) =>
+  new Proxy(realBrowser(), {
+    get: (target, property) => {
+      if (property === "newContext") return newContext;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
 /** A browser whose contexts hold `close()` until the test lets go. */
 const stallingContextClose = () => {
   const real = realBrowser();
   const held = Promise.withResolvers<void>();
-  const contexts: BrowserContext[] = [];
+  const closeContexts: BrowserContext["close"][] = [];
   let closes = 0;
   return {
-    browser: {
-      newContext: async (options?: Parameters<Browser["newContext"]>[0]) => {
-        const context = await real.newContext(options);
-        contexts.push(context);
-        context.close = () => {
-          closes += 1;
-          return held.promise;
-        };
-        return context;
-      },
-    } as unknown as Browser,
+    browser: browserOpeningWith(async (options) => {
+      const context = await real.newContext(options);
+      closeContexts.push(context.close.bind(context));
+      context.close = () => {
+        closes += 1;
+        return held.promise;
+      };
+      return context;
+    }),
     /** Context closes called so far, each held until `release`. */
     closes: () => closes,
     release: async () => {
-      await Promise.all(
-        contexts.map((context) =>
-          Reflect.apply(
-            Object.getPrototypeOf(context).close as BrowserContext["close"],
-            context,
-            []
-          )
-        )
-      );
+      await Promise.all(closeContexts.map((close) => close()));
       held.resolve();
     },
   };
@@ -261,17 +261,15 @@ const stallingContextClose = () => {
 /** A real browser whose contexts run `beforeClose` as they start closing. */
 const browserClosingWith = (beforeClose: () => void) => {
   const real = realBrowser();
-  return {
-    newContext: async (options?: Parameters<Browser["newContext"]>[0]) => {
-      const context = await real.newContext(options);
-      const close = context.close.bind(context);
-      context.close = (closeOptions) => {
-        beforeClose();
-        return close(closeOptions);
-      };
-      return context;
-    },
-  } as unknown as Browser;
+  return browserOpeningWith(async (options) => {
+    const context = await real.newContext(options);
+    const close = context.close.bind(context);
+    context.close = (closeOptions) => {
+      beforeClose();
+      return close(closeOptions);
+    };
+    return context;
+  });
 };
 
 /**
@@ -283,7 +281,7 @@ const browserListingRawHarsOnClose = (
   listed: Set<string>
 ) => {
   const real = realBrowser();
-  const newContext: Browser["newContext"] = async (options) => {
+  return browserOpeningWith(async (options) => {
     const context = await real.newContext(options);
     const close = context.close.bind(context);
     context.close = async (closeOptions) => {
@@ -291,13 +289,6 @@ const browserListingRawHarsOnClose = (
       for (const name of await rawHarFiles(sessionId)) listed.add(name);
     };
     return context;
-  };
-  return new Proxy(real, {
-    get: (target, property) => {
-      if (property === "newContext") return newContext;
-      const value: unknown = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
   });
 };
 
@@ -324,9 +315,8 @@ test.skipIf(!chromiumAvailable)(
         }),
       id,
     });
-    const closedBeforeScope = !realBrowser()
-      .contexts()
-      .includes(context as BrowserContext);
+    const closedBeforeScope =
+      context !== undefined && !realBrowser().contexts().includes(context);
     await result.closeScope();
 
     expect(Exit.isSuccess(result.exit)).toBe(true);
@@ -448,24 +438,35 @@ const recordCaptureHar = async (url: string) => {
   return sanitizeHarArtifact(sanitizeHarArtifact(har));
 };
 
-type HarEntry = {
-  readonly request: { readonly url: string };
-  readonly response: {
-    readonly content: {
-      readonly mimeType?: string;
-      readonly size?: number;
-      readonly text?: string;
-    };
-    readonly status: number;
-  };
-};
+const isHar = Schema.is(
+  Schema.Struct({
+    log: Schema.Struct({
+      entries: Schema.Array(
+        Schema.Struct({
+          request: Schema.Struct({ url: Schema.String }),
+          response: Schema.Struct({
+            content: Schema.Struct({
+              mimeType: Schema.optionalKey(Schema.String),
+              size: Schema.optionalKey(Schema.Finite),
+              text: Schema.optionalKey(Schema.String),
+            }),
+            status: Schema.Finite,
+          }),
+        })
+      ),
+    }),
+  })
+);
 
 /** The page's own exchanges, without timings and page ids. */
-const harExchanges = (har: string, pageOrigin: string) =>
-  (JSON.parse(har) as { log: { entries: HarEntry[] } }).log.entries
+const harExchanges = (har: string, pageOrigin: string) => {
+  const recording = decodeArtifactJson(har);
+  if (!isHar(recording)) throw new Error("Invalid test HAR.");
+  return recording.log.entries
     .filter(({ request }) => request.url.startsWith(pageOrigin))
     .map(({ request, response }) => ({ request, response }))
     .sort((left, right) => left.request.url.localeCompare(right.request.url));
+};
 
 test.skipIf(!chromiumAvailable)(
   "exports the settled responses a direct HAR recording of the page holds",
@@ -567,12 +568,10 @@ test.skipIf(!chromiumAvailable)(
   "captures a browser that opens only after diagnostics start timed out",
   async () => {
     const real = realBrowser();
-    const slowOpening = {
-      newContext: async (options?: Parameters<Browser["newContext"]>[0]) => {
-        await Bun.sleep(1500);
-        return real.newContext(options);
-      },
-    } as unknown as Browser;
+    const slowOpening = browserOpeningWith(async (options) => {
+      await Bun.sleep(1500);
+      return real.newContext(options);
+    });
     const result = await runCase({
       browser: slowOpening,
       execute: () => Effect.void,
@@ -804,9 +803,7 @@ test.skipIf(!chromiumAvailable)(
   "times out diagnostics start on a browser that never opens",
   async () => {
     const opening = Promise.withResolvers<BrowserContext>();
-    const neverOpens = {
-      newContext: () => opening.promise,
-    } as unknown as Browser;
+    const neverOpens = browserOpeningWith(() => opening.promise);
     const result = await runCase({
       browser: neverOpens,
       execute: () => Effect.void,

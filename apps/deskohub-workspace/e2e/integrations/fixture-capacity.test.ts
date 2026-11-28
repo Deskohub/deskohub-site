@@ -36,6 +36,9 @@ type Reply = (
   url: URL,
   init: RequestInit | undefined
 ) => Response | Promise<Response>;
+const rejectPreconnect = () => {
+  throw new Error("Unexpected fetch preconnect");
+};
 const read = (reply: Reply) =>
   Effect.flatMap(FixtureCapacityReader, (reader) =>
     reader.read({
@@ -45,8 +48,14 @@ const read = (reply: Reply) =>
     })
   ).pipe(
     Effect.provide(FixtureCapacityReader.Live),
-    Effect.provideService(FetchHttpClient.Fetch, ((input, init) =>
-      Promise.resolve(reply(new URL(String(input)), init))) as typeof fetch),
+    Effect.provideService(
+      FetchHttpClient.Fetch,
+      Object.assign(
+        (input: RequestInfo | URL, init?: RequestInit) =>
+          Promise.resolve(reply(new URL(String(input)), init)),
+        { preconnect: rejectPreconnect }
+      )
+    ),
     Effect.exit
   );
 const normal: Reply = (url) => {
@@ -82,7 +91,7 @@ test("counts token, tables and both all-owner traversals, with no redirects, pro
       expect(init && "proxy" in init && init.proxy).toBeNull();
       expect(url.origin).toBe("https://api.dotykacka.cz");
       if (url.pathname.endsWith("/reservations")) {
-        const filter = url.searchParams.get("filter")!;
+        const filter = url.searchParams.get("filter") ?? "";
         expect(filter).toContain("status|in|NEW,CONFIRMED;startDate|lt|");
         expect(filter).toContain(";endDate|gt|");
         expect(filter).not.toContain("customer");
@@ -314,10 +323,16 @@ test("rejects unapproved origins before any physical request", async () => {
       })
     ).pipe(
       Effect.provide(FixtureCapacityReader.Live),
-      Effect.provideService(FetchHttpClient.Fetch, (() => {
-        calls++;
-        throw new Error("unexpected");
-      }) as typeof fetch),
+      Effect.provideService(
+        FetchHttpClient.Fetch,
+        Object.assign(
+          () => {
+            calls++;
+            throw new Error("unexpected");
+          },
+          { preconnect: rejectPreconnect }
+        )
+      ),
       Effect.exit
     )
   );

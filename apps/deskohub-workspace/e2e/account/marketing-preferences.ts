@@ -257,7 +257,7 @@ const reactHandlerIsInstalled = ({
   return (
     typeof reactProps === "object" &&
     reactProps !== null &&
-    typeof (reactProps as Record<string, unknown>)[handler] === "function"
+    typeof Reflect.get(reactProps, handler) === "function"
   );
 };
 
@@ -275,7 +275,7 @@ const waitForReactHandler = async (
 
 /** Navigates without allowing a Playwright error to retain a credential-bearing URL as its cause. */
 export const navigateWorkspaceE2EMarketingPreferences = async (
-  page: Page,
+  page: Pick<Page, "goto">,
   url: string
 ): Promise<void> => {
   try {
@@ -332,8 +332,8 @@ const seedWorkspaceE2EMarketingPreferences = Effect.fn(
 
   return yield* runDatabaseOperation(
     "seed marketing preferences fixture",
-    db.transaction((tx) =>
-      Effect.gen(function* () {
+    db.transaction(
+      Effect.fnUntraced(function* (tx) {
         const originalConsents = yield* tx
           .select()
           .from(customerMarketingConsents)
@@ -1071,14 +1071,13 @@ const withAnonymousMarketingContext = <A>(
       "create isolated marketing preferences browser context",
       () => input.browser.newContext({ baseURL: input.baseUrl })
     ),
-    (context) =>
-      Effect.gen(function* () {
-        const page = yield* runMarketingBrowserOperation(
-          "create isolated marketing preferences browser page",
-          () => context.newPage()
-        );
-        return yield* use(context, page);
-      }),
+    Effect.fnUntraced(function* (context) {
+      const page = yield* runMarketingBrowserOperation(
+        "create isolated marketing preferences browser page",
+        () => context.newPage()
+      );
+      return yield* use(context, page);
+    }),
     (context) =>
       runMarketingBrowserOperation(
         "close isolated marketing preferences browser context",
@@ -1188,8 +1187,8 @@ const cleanupWorkspaceE2EMarketingPreferences = Effect.fn(
 
   yield* runDatabaseOperation(
     "restore marketing preferences fixture",
-    db.transaction((tx) =>
-      Effect.gen(function* () {
+    db.transaction(
+      Effect.fnUntraced(function* (tx) {
         const currentTokens = yield* tx
           .select({ tokenHash: customerMarketingManagementTokens.tokenHash })
           .from(customerMarketingManagementTokens)
@@ -1358,8 +1357,9 @@ const runAnonymousMarketingPreferencesFlow = (
   accessUrl: string,
   accountLegalUrl: string
 ): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
-  withAnonymousMarketingContext(input, (context, page) =>
-    Effect.gen(function* () {
+  withAnonymousMarketingContext(
+    input,
+    Effect.fnUntraced(function* (context, page) {
       yield* runMarketingBrowserOperation(
         "prime anonymous marketing preferences context",
         () => primePreviewAccess(context, input.baseUrl, input.bypassSecret)
@@ -1501,8 +1501,9 @@ const runReplayedMarketingPreferencesFlow = (
       fixture.customerId
     ).pipe(Effect.map(sessionTokenHashes));
 
-    yield* withAnonymousMarketingContext(input, (context, page) =>
-      Effect.gen(function* () {
+    yield* withAnonymousMarketingContext(
+      input,
+      Effect.fnUntraced(function* (context, page) {
         yield* runMarketingBrowserOperation(
           "prime replay marketing preferences context",
           () => primePreviewAccess(context, input.baseUrl, input.bypassSecret)
@@ -1626,7 +1627,10 @@ const runReplayedMarketingPreferencesFlow = (
     );
   });
 
-const assertExactPageUrl = (page: Page, expectedUrl: string): void => {
+const assertExactPageUrl = (
+  page: Pick<Page, "url">,
+  expectedUrl: string
+): void => {
   assert(
     page.url() === expectedUrl,
     "Marketing preferences page URL was not the expected clean legal URL"
@@ -1634,7 +1638,7 @@ const assertExactPageUrl = (page: Page, expectedUrl: string): void => {
 };
 
 export const navigateAuthenticatedWorkspaceE2EMarketingPreferences = async (
-  page: Page,
+  page: Pick<Page, "goto" | "url">,
   accountLegalUrl: string
 ): Promise<void> => {
   await navigateWorkspaceE2EMarketingPreferences(page, accountLegalUrl);
@@ -1648,32 +1652,31 @@ const verifyWorkspaceE2EMarketingPreferences = Effect.fn(
     seedWorkspaceE2EMarketingPreferences({
       customerId: input.customerId,
     }),
-    (fixture) =>
-      Effect.gen(function* () {
-        const urls = yield* makeMarketingPreferenceUrls({
-          baseUrl: input.baseUrl,
-          rawLinkToken: fixture.rawLinkToken,
-        });
+    Effect.fnUntraced(function* (fixture) {
+      const urls = yield* makeMarketingPreferenceUrls({
+        baseUrl: input.baseUrl,
+        rawLinkToken: fixture.rawLinkToken,
+      });
 
-        yield* runAuthenticatedMarketingPreferencesFlow(
-          input,
-          fixture,
-          urls.accountLegalUrl
-        );
-        yield* runAnonymousMarketingPreferencesFlow(
-          input,
-          fixture,
-          urls.accessUrl,
-          urls.accountLegalUrl
-        );
-        yield* runReplayedMarketingPreferencesFlow(
-          input,
-          fixture,
-          urls.accessUrl,
-          urls.invalidAccessUrl,
-          urls.accountLegalUrl
-        );
-      }),
+      yield* runAuthenticatedMarketingPreferencesFlow(
+        input,
+        fixture,
+        urls.accountLegalUrl
+      );
+      yield* runAnonymousMarketingPreferencesFlow(
+        input,
+        fixture,
+        urls.accessUrl,
+        urls.accountLegalUrl
+      );
+      yield* runReplayedMarketingPreferencesFlow(
+        input,
+        fixture,
+        urls.accessUrl,
+        urls.invalidAccessUrl,
+        urls.accountLegalUrl
+      );
+    }),
     cleanupWorkspaceE2EMarketingPreferences
   );
 });

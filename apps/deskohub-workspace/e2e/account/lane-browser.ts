@@ -18,6 +18,7 @@ import {
   waitForReactHydration,
 } from "../browser";
 import type {
+  BrowserPageFunction,
   E2EBrowserSession,
   OpenE2EBrowserSession,
 } from "../browser-session";
@@ -326,10 +327,17 @@ const isSessionOf = async (email: string) => {
     cache: "no-store",
     credentials: "same-origin",
   });
-  const body = (response.ok ? await response.json() : null) as {
-    readonly user?: { readonly email?: string };
-  } | null;
-  return body?.user?.email === email;
+  const body: unknown = response.ok ? await response.json() : null;
+  if (typeof body !== "object" || body === null || !("user" in body)) {
+    return false;
+  }
+  const { user } = body;
+  return (
+    typeof user === "object" &&
+    user !== null &&
+    "email" in user &&
+    user.email === email
+  );
 };
 
 /** Whether native validation holds a message for the input. */
@@ -463,10 +471,15 @@ const hasControlLabel = ({
   readonly label: string;
   readonly selector: string;
 }) =>
-  Array.from(document.querySelectorAll(selector)).some((control) =>
-    Array.from((control as HTMLButtonElement).labels ?? []).some(
-      (labelElement) => labelElement.textContent?.trim() === label
-    )
+  Array.from(document.querySelectorAll(selector)).some(
+    (control) =>
+      "labels" in control &&
+      control.labels instanceof NodeList &&
+      Array.from(control.labels).some(
+        (labelElement) =>
+          labelElement instanceof HTMLLabelElement &&
+          labelElement.textContent?.trim() === label
+      )
   );
 
 /** Whether a main heading reads `heading`. */
@@ -631,7 +644,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
   // An evaluation that overruns its bound fails rather than timing out.
   const evaluate = <A, Arg>(
     label: string,
-    read: (arg: Arg) => A | Promise<A>,
+    read: BrowserPageFunction<Arg, A>,
     arg: Arg
   ) =>
     withLaneSession((laneSession) =>
@@ -641,7 +654,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
     );
   const waitFor = <Arg>(
     description: string,
-    condition: (arg: Arg) => unknown,
+    condition: BrowserPageFunction<Arg, unknown>,
     arg: Arg,
     timeoutMs: number
   ) =>
@@ -806,7 +819,7 @@ export const makeWorkspaceE2EAccountLaneBrowser = ({
               accountProfileFieldSelectors.billingCompanyName,
               drafts.billingCompanyName,
             ],
-          ],
+          ] as const,
           profile: (["firstName", "lastName", "phone"] as const).map(
             (field) =>
               [accountProfileFieldSelectors[field], drafts[field]] as const

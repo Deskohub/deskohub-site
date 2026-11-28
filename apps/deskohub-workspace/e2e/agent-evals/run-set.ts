@@ -8,11 +8,14 @@ import type {
   AgentEvalReservationRecord,
   AgentEvalStatusPageCheck,
 } from "./judges";
+import { redactAgentEvalValue } from "./redaction";
 import {
   type AgentEvalRunResult,
   type AgentEvalSummary,
   formatAgentEvalSummaryMarkdown,
+  parseAgentEvalRunResult,
 } from "./results";
+import { agentEvalOutputDirectory } from "./run-settings";
 import type { AgentEvalTaskParameters } from "./tasks";
 
 /**
@@ -24,13 +27,6 @@ const agentEvalResultsRoot = resolve(
   workspaceDir,
   "e2e-artifacts",
   "agent-eval-results"
-);
-
-/** The agent eval config's Playwright output directory. */
-export const agentEvalOutputDirectory = resolve(
-  workspaceDir,
-  "e2e-artifacts",
-  "agent-evals"
 );
 
 const runSetPath = resolve(agentEvalOutputDirectory, "run-set.json");
@@ -122,10 +118,11 @@ export type AgentEvalJudgeInput =
       readonly statusPage: AgentEvalStatusPageCheck | null;
     };
 
-/** Writes a judge input; the caller redacts it first. */
+/** Writes a redacted judge input. */
 export const writeAgentEvalJudgeInput = async (
   result: AgentEvalRunResult,
-  judgeInput: AgentEvalJudgeInput
+  judgeInput: AgentEvalJudgeInput,
+  identifiers: readonly string[]
 ) => {
   await writeJsonAtomically(
     resolve(
@@ -133,7 +130,7 @@ export const writeAgentEvalJudgeInput = async (
       "judge-inputs",
       runResultFileName(result)
     ),
-    judgeInput
+    redactAgentEvalValue(judgeInput, identifiers)
   );
 };
 
@@ -157,11 +154,8 @@ export const readAgentEvalRunResults = async (
     file.endsWith(".json")
   );
   return Promise.all(
-    files.map(
-      async (file) =>
-        JSON.parse(
-          await readFile(resolve(directory, file), "utf8")
-        ) as AgentEvalRunResult
+    files.map(async (file) =>
+      parseAgentEvalRunResult(await readFile(resolve(directory, file), "utf8"))
     )
   );
 };

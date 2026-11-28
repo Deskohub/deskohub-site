@@ -1,5 +1,4 @@
 import { expect, type Page } from "@playwright/test";
-import { Effect } from "effect";
 import { getAccountSignInPath } from "@/features/account/routes";
 import { m } from "@/features/i18n";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
@@ -128,7 +127,7 @@ export async function withStatusOutcome(
   );
   try {
     const path = statusPath(locale, fixture.reservationId);
-    const accessToken = await Effect.runPromise(
+    const accessToken = await localDatabase(
       createReservationAccessToken({ locale, orderId: fixture.reservationId })
     );
     await openSettledPage(

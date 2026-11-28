@@ -43,7 +43,8 @@ export const recordReservationIntent = Effect.fn("E2E.recordReservationIntent")(
       !caseId ||
       !reservationIntentJournalPath(caseId) ||
       !journal ||
-      ("email" in input.owner && !isTestEmailAddress(input.owner.email)) ||
+      ("email" in input.owner &&
+        (!input.owner.email || !isTestEmailAddress(input.owner.email))) ||
       !Number.isFinite(input.startDate.getTime()) ||
       !Number.isFinite(input.endDate.getTime()) ||
       input.endDate.getTime() <= input.startDate.getTime()
@@ -113,7 +114,7 @@ export const reservationIntentJournalPath = (caseId: string) => {
       `${caseId}.json`
     );
   }
-  if ((workspaceE2EAccountCaseIds as readonly string[]).includes(caseId)) {
+  if (workspaceE2EAccountCaseIds.some((id) => id === caseId)) {
     return resolve(
       workspaceDir,
       "e2e-artifacts/checkout/account-journals",

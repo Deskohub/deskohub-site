@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isTestEmailAddress } from "@deskohub/test-email";
+import { Result, Schema } from "effect";
 import { workspaceE2EAccountCaseIds } from "./account/catalog";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "./account/config";
 import { workspaceE2EAccountLaneId } from "./account/journal";
@@ -22,6 +23,7 @@ import { readWorkspaceE2ERunPlan } from "./playwright-checkout/run-plan";
 import {
   type ReservationIntent,
   readReservationJournal,
+  reservationIntentSchema,
 } from "./reservation-journal";
 import { workspaceDir } from "./runtime";
 import type { E2ERunContext } from "./services/telemetry";
@@ -139,8 +141,8 @@ export const readRunOwnership = async (
   )
     throw new Error("Missing or duplicate creation intent coverage");
   for (const intent of intents) {
-    if ("email" in intent.owner) emails.add(intent.owner.email);
-    else customerIds.add(intent.owner.customerId);
+    if ("customerId" in intent.owner) customerIds.add(intent.owner.customerId);
+    else emails.add(intent.owner.email);
   }
   if ([...emails].some((email) => !isTestEmailAddress(email)))
     throw new Error("Unknown synthetic owner coverage");
@@ -153,6 +155,10 @@ export const readRunOwnership = async (
   };
 };
 
+const decodeReservationIntent = Schema.decodeUnknownResult(
+  reservationIntentSchema
+);
+
 export const parseReservationIntents = (
   value: unknown,
   context: Pick<E2ERunContext, "runId">,
@@ -161,32 +167,18 @@ export const parseReservationIntents = (
   if (!Array.isArray(value))
     throw new Error("Missing reservation intent coverage");
   return value.map((entry: unknown) => {
+    const decoded = decodeReservationIntent(entry);
+    if (Result.isFailure(decoded)) {
+      throw new Error("Unknown reservation intent coverage");
+    }
+    const intent = decoded.success;
     if (
-      !isRecord(entry) ||
-      typeof entry.id !== "string" ||
-      !entry.id ||
-      typeof entry.caseId !== "string" ||
-      !cases.includes(entry.caseId) ||
-      entry.runId !== context.runId ||
-      !isRecord(entry.owner) ||
-      !(
-        (typeof entry.owner.email === "string" &&
-          entry.owner.email.length > 0) ||
-        (typeof entry.owner.customerId === "string" &&
-          entry.owner.customerId.length > 0)
-      ) ||
-      typeof entry.startDate !== "string" ||
-      typeof entry.endDate !== "string" ||
-      !Number.isFinite(Date.parse(entry.startDate)) ||
-      !(Date.parse(entry.endDate) > Date.parse(entry.startDate)) ||
-      !(entry.orderId === undefined || typeof entry.orderId === "string") ||
-      !(
-        entry.reservationId === undefined ||
-        typeof entry.reservationId === "string"
-      )
+      !cases.includes(intent.caseId) ||
+      intent.runId !== context.runId ||
+      !(Date.parse(intent.endDate) > Date.parse(intent.startDate))
     )
       throw new Error("Unknown reservation intent coverage");
-    return entry as ReservationIntent;
+    return intent;
   });
 };
 

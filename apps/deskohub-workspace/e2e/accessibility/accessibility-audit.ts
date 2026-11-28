@@ -30,7 +30,7 @@ export const ariaSnapshotLocales = [
 ] as const satisfies readonly AuditedLocale[];
 
 export const hasAriaSnapshots = (locale: AuditedLocale) =>
-  (ariaSnapshotLocales as readonly AuditedLocale[]).includes(locale);
+  ariaSnapshotLocales.some((snapshotLocale) => snapshotLocale === locale);
 
 const supportedDocumentLanguage = new RegExp(
   `^(${supportedLocales.join("|")})$`

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type * as Playwright from "@playwright/test";
+import { runInNewContext } from "node:vm";
 import { encodeAuthCallbackReturn } from "@/features/account/routes";
 import { outcomeOf } from "@/shared/testing/promise-outcome.test-utils";
 import {
@@ -30,6 +30,10 @@ const czechCopy = {
 };
 
 type CdpHandler = (params: unknown) => Promise<unknown> | unknown;
+type ReviewPage = Parameters<typeof prepareCallbackDocumentReview>[0];
+type Session = Awaited<ReturnType<ReviewPage["openSession"]>>;
+type DocumentEvent = Parameters<Session["on"]>[0];
+type DocumentListener = Parameters<Session["on"]>[1];
 
 const makeFakeCdp = (overrides: {
   readonly screenshot?: CdpHandler;
@@ -37,21 +41,23 @@ const makeFakeCdp = (overrides: {
   readonly detach?: () => Promise<void>;
   readonly frameTree?: unknown;
   readonly failingMethods?: ReadonlySet<string>;
-  readonly deferredMethods?: ReadonlyMap<string, (value: unknown) => void>;
+  readonly deferredMethods?: ReadonlyMap<
+    string,
+    (resolve: (value: unknown) => void) => void
+  >;
 }) => {
-  const listeners = new Map<string, Set<(event: never) => void>>();
+  const listeners = new Map<DocumentEvent, Set<DocumentListener>>();
   const calls: string[] = [];
   const bindings = new Set<string>();
   const cdp = {
-    on: (event: string, handler: (event: never) => void) => {
+    on: (event: DocumentEvent, handler: DocumentListener) => {
       listeners.set(event, (listeners.get(event) ?? new Set()).add(handler));
     },
-    off: (event: string, handler: (event: never) => void) => {
+    off: (event: DocumentEvent, handler: DocumentListener) => {
       listeners.get(event)?.delete(handler);
     },
-    emit: (event: string, payload: unknown) => {
-      for (const handler of listeners.get(event) ?? [])
-        (handler as (p: unknown) => void)(payload);
+    emit: (event: DocumentEvent, payload?: unknown) => {
+      for (const handler of listeners.get(event) ?? []) handler(payload);
     },
     send: async (method: string, params?: unknown): Promise<unknown> => {
       calls.push(method);
@@ -69,7 +75,15 @@ const makeFakeCdp = (overrides: {
           overrides.frameTree ?? { frameTree: { frame: { id: mainFrameId } } }
         );
       if (method === "Runtime.addBinding") {
-        bindings.add((params as { name: string }).name);
+        if (
+          typeof params !== "object" ||
+          params === null ||
+          !("name" in params) ||
+          typeof params.name !== "string"
+        ) {
+          throw new Error("Missing binding name");
+        }
+        bindings.add(params.name);
         return {};
       }
       if (method === "Runtime.removeBinding") {
@@ -88,7 +102,7 @@ const makeFakeCdp = (overrides: {
       calls.push("detach");
       if (overrides.detach) return overrides.detach();
     },
-  };
+  } satisfies Session & { emit(event: DocumentEvent, payload?: unknown): void };
   return { cdp, listeners, calls, bindings };
 };
 
@@ -96,6 +110,7 @@ type FakePageOverrides = {
   readonly cdp?: ReturnType<typeof makeFakeCdp>;
   readonly url?: string;
   readonly sessionDelayMs?: number;
+  readonly holdsVirtualAuthenticator?: () => boolean;
 };
 
 const makeFakePage = (overrides: FakePageOverrides = {}) => {
@@ -104,26 +119,26 @@ const makeFakePage = (overrides: FakePageOverrides = {}) => {
   ];
   const initScripts: string[] = [];
   const fakeCdp = overrides.cdp ?? makeFakeCdp({ failingMethods: new Set() });
-  const page = {
-    viewportSize: () => viewports[viewports.length - 1],
+  const page: ReviewPage = {
+    viewportSize: () => viewports.at(-1) ?? null,
     setViewportSize: async (size: { width: number; height: number }) => {
       viewports.push(size);
     },
-    context: () => ({
-      newCDPSession: async () => {
-        if (overrides.sessionDelayMs) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, overrides.sessionDelayMs)
-          );
-        }
-        return fakeCdp.cdp;
-      },
-    }),
+    openSession: async () => {
+      if (overrides.sessionDelayMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, overrides.sessionDelayMs)
+        );
+      }
+      return fakeCdp.cdp;
+    },
+    holdsVirtualAuthenticator:
+      overrides.holdsVirtualAuthenticator ?? (() => false),
     addInitScript: async (source: string) => {
       initScripts.push(source);
     },
     url: () => overrides.url ?? validCallbackUrl,
-  } as unknown as Playwright.Page;
+  };
   return { page, viewports, initScripts, fakeCdp };
 };
 
@@ -246,42 +261,32 @@ const makeSnapshotGlobals = (
     fonts: { status: overrides.fontsStatus ?? "loaded" },
   };
   const inner = overrides.inner ?? { width: 1440, height: 1000 };
-  const previous = {
-    window: globalThis.window,
-    document: globalThis.document,
-    location: globalThis.location,
-    getComputedStyle: globalThis.getComputedStyle,
-  };
-  (globalThis as Record<string, unknown>).window = {
+  const window = {
     innerWidth: inner.width,
     innerHeight: inner.height,
+    get top(): object {
+      return window;
+    },
   };
-  (globalThis.window as Record<string, unknown>).top =
-    globalThis.window as unknown;
-  (globalThis as Record<string, unknown>).document = fakeDocument;
-  (globalThis as Record<string, unknown>).location = {
-    href: overrides.locationHref ?? validCallbackUrl,
-  };
-  (globalThis as Record<string, unknown>).getComputedStyle = (node: {
-    computedStyle?: unknown;
-  }) => node.computedStyle ?? { display: "block", visibility: "visible" };
-  return () => {
-    (globalThis as Record<string, unknown>).window = previous.window;
-    (globalThis as Record<string, unknown>).document = previous.document;
-    (globalThis as Record<string, unknown>).location = previous.location;
-    (globalThis as Record<string, unknown>).getComputedStyle =
-      previous.getComputedStyle;
+  return {
+    window,
+    document: fakeDocument,
+    location: { href: overrides.locationHref ?? validCallbackUrl },
+    getComputedStyle: (node: { computedStyle?: unknown }) =>
+      node.computedStyle ?? { display: "block", visibility: "visible" },
   };
 };
 
-const snapshotConfig = {
+type SnapshotConfig = Parameters<typeof collectCallbackDocumentSnapshot>[0];
+
+const snapshotConfig: SnapshotConfig = {
   baseOrigin,
   attemptParamName: "attempt",
   uuidPatternSource:
     "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
   callbackPath: "/en-US/auth/callback",
   returnParamName: "return",
-  returnValue: null as string | null,
+  returnValue: null,
   loadingSelector: '[data-slot="auth-callback-loading"]',
   loadingAriaLabel: englishCopy.label,
   titleText: englishCopy.title,
@@ -295,18 +300,34 @@ const snapshotConfig = {
   viewport,
 };
 
+const collectSnapshot = (
+  config: SnapshotConfig,
+  overrides?: Parameters<typeof makeSnapshotGlobals>[0]
+): string => {
+  const payload: unknown = runInNewContext(
+    `(${collectCallbackDocumentSnapshot.toString()})(config)`,
+    { ...makeSnapshotGlobals(overrides), config, URL }
+  );
+  if (typeof payload !== "string")
+    throw new Error("Expected a snapshot payload");
+  return payload;
+};
+
+const snapshotValidity = (parsed: unknown): boolean => {
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("v" in parsed) ||
+    typeof parsed.v !== "boolean"
+  ) {
+    throw new Error("Expected a snapshot validity flag");
+  }
+  return parsed.v;
+};
+
 describe("collectCallbackDocumentSnapshot", () => {
   test("accepts a fully valid callback document", () => {
-    const restore = makeSnapshotGlobals();
-    try {
-      expect(
-        JSON.parse(collectCallbackDocumentSnapshot(snapshotConfig))
-      ).toEqual({
-        v: true,
-      });
-    } finally {
-      restore();
-    }
+    expect(JSON.parse(collectSnapshot(snapshotConfig))).toEqual({ v: true });
   });
 
   test("rejects invalid URL grammar families", () => {
@@ -319,15 +340,8 @@ describe("collectCallbackDocumentSnapshot", () => {
       "https://foreign.example/en-US/auth/callback?attempt=550e8400-e29b-41d4-a716-446655440000",
     ];
     for (const href of families) {
-      const restore = makeSnapshotGlobals({ locationHref: href });
-      try {
-        const parsed = JSON.parse(
-          collectCallbackDocumentSnapshot(snapshotConfig)
-        ) as { v: boolean };
-        expect(parsed.v).toBe(false);
-      } finally {
-        restore();
-      }
+      const payload = collectSnapshot(snapshotConfig, { locationHref: href });
+      expect(snapshotValidity(JSON.parse(payload))).toBe(false);
     }
   });
 
@@ -367,39 +381,32 @@ describe("collectCallbackDocumentSnapshot", () => {
       ["fonts-not-loaded", { fontsStatus: "loading" }],
     ];
     for (const [name, overrides] of cases) {
-      const restore = makeSnapshotGlobals(overrides);
-      try {
-        const parsed = JSON.parse(
-          collectCallbackDocumentSnapshot(snapshotConfig)
-        ) as { v: boolean };
-        expect(parsed.v).toBe(false);
-      } finally {
-        restore();
-      }
+      const payload = collectSnapshot(snapshotConfig, overrides);
+      expect(snapshotValidity(JSON.parse(payload)), name).toBe(false);
     }
   });
 
   test("reports a failing card through numeric metrics only", () => {
-    const restore = makeSnapshotGlobals({
+    const payload = collectSnapshot(snapshotConfig, {
       card: { title: { text: "Leaked heading" }, body: { count: 0 } },
       locationHref: `${baseOrigin}/en-US/auth/callback?secret=leak`,
     });
-    try {
-      const payload = collectCallbackDocumentSnapshot(snapshotConfig);
-      const parsed = JSON.parse(payload) as {
-        v: boolean;
-        m: Record<string, unknown>;
-      };
-      expect(parsed.v).toBe(false);
-      expect(parsed.m).toMatchObject({ title: 1, bodyCount: 1, url: 1 });
-      expect(
-        Object.values(parsed.m).every((value) => typeof value === "number")
-      ).toBe(true);
-      expect(payload).not.toContain("Leaked");
-      expect(payload).not.toContain("leak");
-    } finally {
-      restore();
+    const parsed: unknown = JSON.parse(payload);
+    expect(snapshotValidity(parsed)).toBe(false);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("m" in parsed) ||
+      typeof parsed.m !== "object" ||
+      parsed.m === null
+    ) {
+      throw new Error("Expected snapshot metrics");
     }
+    expect(parsed.m).toMatchObject({ title: 1, bodyCount: 1, url: 1 });
+    const metrics: unknown[] = Object.values(parsed.m);
+    expect(metrics.every((value) => typeof value === "number")).toBe(true);
+    expect(payload).not.toContain("Leaked");
+    expect(payload).not.toContain("leak");
   });
 
   test("accepts the Czech returning callback only with its exact return", () => {
@@ -412,20 +419,12 @@ describe("collectCallbackDocumentSnapshot", () => {
       bodyText: czechCopy.returning,
     };
     const collect = (overrides: Parameters<typeof makeSnapshotGlobals>[0]) => {
-      const restore = makeSnapshotGlobals({
+      const payload = collectSnapshot(czechConfig, {
         card: { ariaLabel: czechCopy.label },
         copy: { title: czechCopy.title, body: czechCopy.returning },
         ...overrides,
       });
-      try {
-        return (
-          JSON.parse(collectCallbackDocumentSnapshot(czechConfig)) as {
-            v: boolean;
-          }
-        ).v;
-      } finally {
-        restore();
-      }
+      return snapshotValidity(JSON.parse(payload));
     };
     const czechCallback = `${baseOrigin}/cs-CZ/auth/callback`;
 
@@ -471,16 +470,9 @@ describe("collectCallbackDocumentSnapshot", () => {
   test("checks fonts and the viewport only for a capture", () => {
     const validationOnlyConfig = { ...snapshotConfig, viewport: null };
     const collect = (overrides: Parameters<typeof makeSnapshotGlobals>[0]) => {
-      const restore = makeSnapshotGlobals(overrides);
-      try {
-        return (
-          JSON.parse(collectCallbackDocumentSnapshot(validationOnlyConfig)) as {
-            v: boolean;
-          }
-        ).v;
-      } finally {
-        restore();
-      }
+      return snapshotValidity(
+        JSON.parse(collectSnapshot(validationOnlyConfig, overrides))
+      );
     };
 
     expect(
@@ -718,7 +710,7 @@ describe("prepareCallbackDocumentReview", () => {
       expect(
         await outcomeOf(
           prepareCallbackDocumentReview(
-            fakeCdp.page ?? makeFakePage({ cdp: fakeCdp }).page,
+            makeFakePage({ cdp: fakeCdp }).page,
             baseOrigin,
             accountLanding,
             viewport,
@@ -760,7 +752,7 @@ describe("prepareCallbackDocumentReview", () => {
         throw new Error("binding removal failed");
       },
     });
-    const { page, viewports, review } = await prepare({ cdp: fakeCdp });
+    const { viewports, review } = await prepare({ cdp: fakeCdp });
     expect(await outcomeOf(review.dispose())).toThrow();
     expect(fakeCdp.calls).toContain("detach");
     expect(viewports[viewports.length - 1]).toEqual({
@@ -774,6 +766,17 @@ describe("prepareCallbackDocumentReview", () => {
     ).length;
     expect(detachCalls).toBe(1);
     await review.dispose();
+  });
+
+  test("dispose leaves a session attached when the page holds a virtual authenticator", async () => {
+    let authenticatorHeld = false;
+    const { fakeCdp, review } = await prepare({
+      holdsVirtualAuthenticator: () => authenticatorHeld,
+    });
+    authenticatorHeld = true;
+    await review.dispose();
+    expect(fakeCdp.calls).toContain("Runtime.removeBinding");
+    expect(fakeCdp.calls).not.toContain("detach");
   });
 
   test("foreign or opaque main-default origins cannot admit a receipt, even with matching event ids", async () => {
@@ -836,17 +839,18 @@ describe("prepareCallbackDocumentReview", () => {
     const firstWrite = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
-    const page = {
-      viewportSize: () => viewports[viewports.length - 1],
+    const page: ReviewPage = {
+      viewportSize: () => viewports.at(-1) ?? null,
       setViewportSize: async (size: { width: number; height: number }) => {
         writes += 1;
         if (writes === 1) await firstWrite;
         viewports.push(size);
       },
-      context: () => ({ newCDPSession: async () => fakeCdp.cdp }),
+      openSession: async () => fakeCdp.cdp,
+      holdsVirtualAuthenticator: () => false,
       addInitScript: async () => {},
       url: () => validCallbackUrl,
-    } as unknown as Playwright.Page;
+    };
     const controller = new AbortController();
     const preparePromise = prepareCallbackDocumentReview(
       page,
@@ -889,21 +893,18 @@ describe("prepareCallbackDocumentReview", () => {
     const viewports: Array<{ width: number; height: number }> = [
       { width: 800, height: 600 },
     ];
-    let releaseSession: (session: unknown) => void = () => undefined;
-    const page = {
-      viewportSize: () => viewports[viewports.length - 1],
+    const { promise: session, resolve: releaseSession } =
+      Promise.withResolvers<Session>();
+    const page: ReviewPage = {
+      viewportSize: () => viewports.at(-1) ?? null,
       setViewportSize: async (size: { width: number; height: number }) => {
         viewports.push(size);
       },
-      context: () => ({
-        newCDPSession: () =>
-          new Promise((resolve) => {
-            releaseSession = resolve;
-          }),
-      }),
+      openSession: () => session,
+      holdsVirtualAuthenticator: () => false,
       addInitScript: async () => {},
       url: () => validCallbackUrl,
-    } as unknown as Playwright.Page;
+    };
     const controller = new AbortController();
     const preparePromise = prepareCallbackDocumentReview(
       page,
@@ -930,15 +931,11 @@ describe("prepareCallbackDocumentReview", () => {
   });
 
   test("binding fulfilled and aborted in the same synchronous turn is owned and removed exactly once", async () => {
-    const releaseAddBinding: Array<(value: unknown) => void> = [];
+    const bindingStarted = Promise.withResolvers<(value: unknown) => void>();
     const fakeCdp = makeFakeCdp({
       failingMethods: new Set(),
       deferredMethods: new Map([
-        [
-          "Runtime.addBinding",
-          (resolve: unknown) =>
-            releaseAddBinding.push(resolve as (value: unknown) => void),
-        ],
+        ["Runtime.addBinding", bindingStarted.resolve],
       ]),
     });
     const { page, viewports } = makeFakePage({ cdp: fakeCdp });
@@ -953,8 +950,8 @@ describe("prepareCallbackDocumentReview", () => {
         signal: controller.signal,
       }
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    releaseAddBinding[0]?.({});
+    const releaseAddBinding = await bindingStarted.promise;
+    releaseAddBinding({});
     controller.abort();
     expect(await outcomeOf(preparePromise)).toThrow();
     await new Promise((resolve) => setTimeout(resolve, 50));

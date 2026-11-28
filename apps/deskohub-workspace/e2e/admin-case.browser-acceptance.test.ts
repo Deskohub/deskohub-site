@@ -10,7 +10,10 @@ import {
   primePreviewBypass,
   retainServerActionSubmission,
 } from "./admin-case";
-import { E2EBrowserSession } from "./browser-session";
+import {
+  type BrowserContextOpener,
+  E2EBrowserSession,
+} from "./browser-session";
 import { runE2ECase } from "./case-runner";
 import {
   isWorkspaceE2ETimeout,
@@ -18,6 +21,7 @@ import {
   workspaceE2EError,
   workspaceE2ETimeoutError,
 } from "./errors";
+import type { PreviewAccessFetch } from "./preview-access";
 import {
   type E2ETelemetryObservation,
   makeE2ETelemetryMock,
@@ -143,23 +147,24 @@ test.skipIf(!chromiumAvailable)(
 // probe's `fetch` holds it until the probe gives up.
 const deploymentOrigin =
   "https://deskohub-workspace-abc123def-synthetic.vercel.app";
-const heldProbeFetch = ((_input: string | URL | Request, init?: RequestInit) =>
+const heldProbeFetch: PreviewAccessFetch = (_input, init) =>
   new Promise<Response>((_resolve, reject) => {
-    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-  })) as typeof fetch;
+    init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+  });
 
 /**
  * Runs one admin case step through the case runner on an admin session and
  * returns the step's annotation, as the reporter would see it.
  */
 const runAdminStep = async (input: {
-  readonly browser?: Browser;
+  readonly browser?: BrowserContextOpener;
   readonly execute: (
     session: E2EBrowserSession
   ) => Effect.Effect<unknown, WorkspaceE2EError>;
   readonly timeoutMs?: number;
 }) => {
   if (!browser) throw new Error("Chromium is not running");
+  const openedBrowser: BrowserContextOpener = input.browser ?? browser;
   const observations: E2ETelemetryObservation[] = [];
   const failures: WorkspaceE2EError[] = [];
   await Effect.runPromiseExit(
@@ -170,7 +175,7 @@ const runAdminStep = async (input: {
             Effect.flatMap(
               openAdminSession({
                 baseURL: origin(),
-                browser: input.browser ?? browser,
+                browser: openedBrowser,
                 caseName: `admin-case-test-${randomUUID()}`,
                 fetch: heldProbeFetch,
               }),
@@ -203,12 +208,8 @@ const annotateAdminStep = async (input: Parameters<typeof runAdminStep>[0]) =>
     outcome,
   }));
 
-const failed = [
-  { failureKind: "error", outcome: "failed" } as const,
-];
-const timedOut = [
-  { failureKind: "timeout", outcome: "timed_out" } as const,
-];
+const failed = [{ failureKind: "error", outcome: "failed" } as const];
+const timedOut = [{ failureKind: "timeout", outcome: "timed_out" } as const];
 
 test.skipIf(!chromiumAvailable)(
   "fails an admin step on a Playwright timeout inside it",
@@ -235,7 +236,7 @@ test.skipIf(!chromiumAvailable)(
             name: "TimeoutError",
           })
         ),
-    } as unknown as Browser;
+    } satisfies BrowserContextOpener;
     expect(
       await annotateAdminStep({
         browser: timingOut,

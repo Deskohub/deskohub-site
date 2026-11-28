@@ -175,7 +175,7 @@ export const parseWorkspaceE2EFlowsInput = (
   } else {
     selection = {
       kind: "subset",
-      flows: new Set(parsed.selected as readonly WorkspaceE2EFlowId[]),
+      flows: new Set(parsed.selected),
     };
   }
   return {
@@ -284,11 +284,13 @@ export const selectedWorkspaceE2EInstantNavigationPlan = (
   readonly projects: readonly string[] | undefined;
   readonly navigationSpecs: readonly WorkspaceE2EInstantNavigationSpecFile[];
 } => {
-  const allNavigationSpecs = (
-    Object.keys(
-      workspaceE2EInstantNavigationSpecFlowByFile
-    ) as readonly WorkspaceE2EInstantNavigationSpecFile[]
-  ).filter((file) => file !== "admin-navigation.pw.ts");
+  const allNavigationSpecs = Object.keys(
+    workspaceE2EInstantNavigationSpecFlowByFile
+  ).filter(
+    (file): file is WorkspaceE2EInstantNavigationSpecFile =>
+      file !== "admin-navigation.pw.ts" &&
+      Object.hasOwn(workspaceE2EInstantNavigationSpecFlowByFile, file)
+  );
 
   if (selection.kind === "all") {
     return { projects: undefined, navigationSpecs: allNavigationSpecs };

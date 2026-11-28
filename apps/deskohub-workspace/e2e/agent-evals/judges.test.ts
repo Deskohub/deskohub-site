@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type AgentEvalJudgement,
   type AgentEvalReservationRecord,
   classifyAgentEvalFailure,
   judgeAgentEvalFacts,
@@ -98,11 +99,15 @@ describe("judgeAgentEvalReservation", () => {
       "reservation-cancelled",
     ],
     ["a paid booking", [record({ paid: true })], "paid-without-permission"],
-  ])("fails Open Space with %s", (_label, records, reason) => {
+  ] satisfies [
+    string,
+    AgentEvalReservationRecord[],
+    AgentEvalJudgement["reason"],
+  ][])("fails Open Space with %s", (_label, records, reason) => {
     expect(judgeAgentEvalReservation(openSpace, records)).toEqual({
       reason,
       success: false,
-    } as never);
+    });
   });
 
   test("judges the newest reservation, not an abandoned earlier draft", () => {
@@ -168,11 +173,14 @@ describe("judgeAgentEvalReservation", () => {
       meetingRoomRecord("2027-02-19T10:00:00Z", "2027-02-19T14:00:00Z"),
       "wrong-date",
     ],
-  ])("judges a meeting room booked for %s", (_label, booked, reason) => {
-    expect(judgeAgentEvalReservation(meetingRoom, [booked]).reason).toBe(
-      reason
-    );
-  });
+  ] as const)(
+    "judges a meeting room booked for %s",
+    (_label, booked, reason) => {
+      expect(judgeAgentEvalReservation(meetingRoom, [booked]).reason).toBe(
+        reason
+      );
+    }
+  );
 
   test("derives a meeting room's duration from Dotypos when the row lacks it", () => {
     expect(
@@ -202,7 +210,7 @@ describe("judgeAgentEvalReservation", () => {
     ["a legacy row read from Dotypos", officeRecord({}), "matched"],
     ["2 days", officeRecord({ dayCount: 2, seats: 2 }), "wrong-date"],
     ["1 seat", officeRecord({ dayCount: 3, seats: 1 }), "wrong-seats"],
-  ])("judges an office booked for %s", (_label, booked, reason) => {
+  ] as const)("judges an office booked for %s", (_label, booked, reason) => {
     expect(judgeAgentEvalReservation(office, [booked]).reason).toBe(reason);
   });
 
@@ -233,11 +241,14 @@ describe("judgeAgentEvalReservation", () => {
       { confirmed: true, reachedByAgent: true },
       "matched",
     ],
-  ])("judges payment with %s", (_label, booked, statusPage, reason) => {
-    expect(
-      judgeAgentEvalReservation(payment, [booked], statusPage).reason
-    ).toBe(reason);
-  });
+  ] as const)(
+    "judges payment with %s",
+    (_label, booked, statusPage, reason) => {
+      expect(
+        judgeAgentEvalReservation(payment, [booked], statusPage).reason
+      ).toBe(reason);
+    }
+  );
 });
 
 describe("classifyAgentEvalFailure", () => {

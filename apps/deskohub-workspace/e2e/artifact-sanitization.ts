@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import {
   isNexiBuildApiUrl,
   summarizeNexiBuildFailureBody,
@@ -31,8 +32,9 @@ const sanitizeArtifactUrlText = (text: string) =>
 // fragments) cannot rewrite timings and sizes into invalid JSON.
 export const sanitizeHarArtifact = (text: string) => {
   try {
-    const har = JSON.parse(text) as Record<string, unknown>;
-    const log = asRecord(har.log);
+    const har = decodeArtifactJson(text);
+    if (har === null) return sanitizeArtifactText(text);
+    const log = asRecord(asRecord(har)?.log);
     const entries = Array.isArray(log?.entries) ? log.entries : [];
 
     for (const entry of entries) {
@@ -63,9 +65,9 @@ const sanitizeHarRequest = (request: Record<string, unknown> | undefined) => {
   if (!request) return;
   if (typeof request.url === "string")
     request.url = sanitizeHarUrl(request.url);
-  request.headers = sanitizeHarNamedValues(request.headers);
+  request.headers = sanitizeNamedValuesField(request.headers);
   request.cookies = [];
-  request.queryString = sanitizeHarNamedValues(request.queryString);
+  request.queryString = sanitizeNamedValuesField(request.queryString);
 
   const postData = asRecord(request.postData);
   if (!postData) return;
@@ -79,7 +81,7 @@ const sanitizeHarResponse = (
   requestUrl: string
 ) => {
   if (!response) return;
-  response.headers = sanitizeHarNamedValues(response.headers);
+  response.headers = sanitizeNamedValuesField(response.headers);
   response.cookies = [];
 
   const content = asRecord(response.content);
@@ -108,13 +110,14 @@ const isNexiBuildUrl = (value: string) => {
 };
 
 /** Redacts the value of every `{ name, value }` pair, keeping the names. */
-export const sanitizeHarNamedValues = (value: unknown) =>
-  Array.isArray(value)
-    ? value.map((item) => {
-        const record = asRecord(item);
-        return record ? { ...record, value: "[redacted]" } : item;
-      })
-    : value;
+export const sanitizeHarNamedValues = (items: readonly unknown[]) =>
+  items.map((item) => {
+    const record = Array.isArray(item) ? item : asRecord(item);
+    return record ? { ...record, value: "[redacted]" } : item;
+  });
+
+const sanitizeNamedValuesField = (value: unknown) =>
+  Array.isArray(value) ? sanitizeHarNamedValues(value) : value;
 
 const sanitizeHarUrl = (value: string) => {
   try {
@@ -127,7 +130,13 @@ const sanitizeHarUrl = (value: string) => {
   }
 };
 
+export const decodeArtifactJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Unknown)
+);
+
+const isRecord = Schema.is(
+  Schema.Record(Schema.String, Schema.mutableKey(Schema.Unknown))
+);
+
 export const asRecord = (value: unknown) =>
-  value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : undefined;
+  isRecord(value) ? value : undefined;

@@ -1,4 +1,4 @@
-import { Data, Effect, Stream } from "effect";
+import { Data, Effect, Option, Schema, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import {
   type WorkspaceE2EDiagnosticCode,
@@ -127,10 +127,9 @@ export const readVercelJson = Effect.fn("vercel.readJson")(function* (
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return yield* Effect.try({
-    catch: invalidPayload,
-    try: () => JSON.parse(new TextDecoder().decode(bytes)),
-  });
+  return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
+    new TextDecoder().decode(bytes)
+  ).pipe(Effect.mapError(invalidPayload));
 });
 
 /** The deployment behind a preview host, as the Vercel API records it. */
@@ -146,6 +145,21 @@ export type VercelDeployment = {
   readonly githubCommitSha: string | undefined;
 };
 
+const readDeployment = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.NonEmptyString,
+    meta: Schema.optionalKey(Schema.Unknown),
+    ownerId: Schema.NonEmptyString,
+    projectId: Schema.optionalKey(Schema.Unknown),
+    readyState: Schema.optionalKey(Schema.Unknown),
+    target: Schema.optionalKey(Schema.Unknown),
+  })
+);
+
+const readGitMetadata = Schema.decodeUnknownOption(
+  Schema.Struct({ githubCommitSha: Schema.String })
+);
+
 export const decodeVercelDeployment = (
   payload: unknown,
   expectedProjectId: string
@@ -153,30 +167,16 @@ export const decodeVercelDeployment = (
   | { readonly kind: "match"; readonly deployment: VercelDeployment }
   | { readonly kind: "invalid" }
   | { readonly kind: "project-mismatch" } => {
-  const candidate = payload as {
-    id?: unknown;
-    meta?: { githubCommitSha?: unknown } | null;
-    ownerId?: unknown;
-    projectId?: unknown;
-    readyState?: unknown;
-    target?: unknown;
-  } | null;
-  if (
-    typeof candidate?.id !== "string" ||
-    candidate.id.length === 0 ||
-    typeof candidate.ownerId !== "string" ||
-    candidate.ownerId.length === 0
-  ) {
-    return { kind: "invalid" };
-  }
+  const decoded = readDeployment(payload);
+  if (Option.isNone(decoded)) return { kind: "invalid" };
+  const candidate = decoded.value;
   if (candidate.projectId !== expectedProjectId) {
     return { kind: "project-mismatch" };
   }
-  const { githubCommitSha } = candidate.meta ?? {};
+  const metadata = Option.getOrUndefined(readGitMetadata(candidate.meta));
   return {
     deployment: {
-      githubCommitSha:
-        typeof githubCommitSha === "string" ? githubCommitSha : undefined,
+      githubCommitSha: metadata?.githubCommitSha,
       id: candidate.id,
       ownerId: candidate.ownerId,
       projectId: candidate.projectId,

@@ -1,6 +1,7 @@
 import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { Effect } from "effect";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { parseWorkspaceAvailabilityResponse } from "@/features/reservation/workspace-availability";
 import { signInWorkspaceE2ESyntheticBrowserContext } from "../account/seeded-session";
 import { readAgentEvalRunResources } from "../agent-evals/records";
 import { tryWorkspaceE2EPromise } from "../errors";
@@ -37,9 +38,8 @@ async function pickPayAuditDate(page: Page) {
     { timeout: workspaceE2ETimeouts.browserAction }
   );
   expect(response.ok()).toBe(true);
-  const { unavailableDates } = (await response.json()) as {
-    readonly unavailableDates: readonly string[];
-  };
+  const payload: unknown = await response.json();
+  const { unavailableDates } = parseWorkspaceAvailabilityResponse(payload);
   for (
     let offset = payAuditDateWindow.fromOffsetDays;
     offset <= payAuditDateWindow.toOffsetDays;

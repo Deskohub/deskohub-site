@@ -1,9 +1,5 @@
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import type { AllocationOwner } from "./allocation";
 import { AllocationRuntimeConfig } from "./config";
 

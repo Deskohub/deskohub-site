@@ -1,5 +1,8 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import type { Reservation } from "@deskohub/dotypos";
+import {
+  DotyposDiscountGroupIdSchema,
+  type Reservation,
+} from "@deskohub/dotypos";
 import type { Table } from "@deskohub/dotypos/generated";
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -26,12 +29,17 @@ import {
   prepareDiscountAvailabilityE2E,
 } from "./cases/discounts";
 import { meetingRoomE2EDurations } from "./cases/meeting-room";
-import type { DatasourceConfig, WorkspaceE2EConfig } from "./config";
-import type { E2EDotyposDiscountGroup } from "./integrations/dotypos";
+import { getDatasourceConfig, type WorkspaceE2EConfig } from "./config";
+import { makeTestE2EEnvironment } from "./e2e-env.test-fixture";
 import { workspaceE2EReferralCheckoutCaseIds } from "./referrals/plan";
 import { workspaceE2ETimeouts } from "./timeouts";
 
 afterEach(() => setSystemTime());
+
+const customerDiscountGroup = {
+  basisPoints: 1000,
+  id: DotyposDiscountGroupIdSchema.make("e2e-discount-group"),
+};
 
 test("covers whole Prague dates at both candidate-range boundaries", () => {
   expect(
@@ -71,10 +79,7 @@ test("wires the case-plan per-date maximums through the real case builders", asy
   const reservedDeskDates = ["2099-08-24", "2099-08-25"];
   const reservedDeskDateSet = new Set(reservedDeskDates);
   const preparation: WorkspaceE2EPreparation = {
-    customerDiscountGroup: {
-      basisPoints: 1000,
-      id: "e2e-discount-group",
-    } as E2EDotyposDiscountGroup,
+    customerDiscountGroup,
     discounts: {
       availableBasicDates: openSpaceDates,
       availablePlusDates: [
@@ -89,13 +94,14 @@ test("wires the case-plan per-date maximums through the real case builders", asy
     office: undefined,
     table: undefined,
   };
+  const rejectProviderRequest = () => {
+    throw new Error("provider HTTP must not run in a construction test");
+  };
+  const rejectFetch = Object.assign(async () => rejectProviderRequest(), {
+    preconnect: rejectProviderRequest,
+  });
   const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(FetchHttpClient.Fetch, (() =>
-        Promise.reject(
-          new Error("provider HTTP must not run in a construction test")
-        )) as typeof globalThis.fetch)
-    )
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, rejectFetch))
   );
 
   const cases = await Effect.runPromise(
@@ -107,7 +113,7 @@ test("wires the case-plan per-date maximums through the real case builders", asy
         toOffsetDays: 0,
       },
       config: makeConstructionTestConfig(),
-      datasourceConfig: {} as DatasourceConfig,
+      datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
       flowStates: [],
       preparation,
       traceConstruction: false,
@@ -117,7 +123,7 @@ test("wires the case-plan per-date maximums through the real case builders", asy
   expect(cases.length).toBeGreaterThan(0);
   expect(cases.some(({ id }) => id === "checkout-discount-code")).toBe(true);
   const referralCheckouts = cases.filter(({ id }) =>
-    (workspaceE2EReferralCheckoutCaseIds as readonly string[]).includes(id)
+    workspaceE2EReferralCheckoutCaseIds.some((caseId) => caseId === id)
   );
   expect(
     referralCheckouts.map(({ checkoutStates }) => checkoutStates.length)
@@ -208,15 +214,12 @@ test("prepares the transient calendar pool with the bare reserved-desk product",
     makeDiscountE2ECases({
       allocation,
       config,
-      datasourceConfig: {} as DatasourceConfig,
+      datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
       excludedDates: new Set<string>(),
       flowStates: [],
       preparation: {
         ...preparation,
-        customerDiscountGroup: {
-          basisPoints: 1000,
-          id: "e2e-discount-group",
-        } as E2EDotyposDiscountGroup,
+        customerDiscountGroup,
       },
     }).pipe(Effect.provide(httpClientLayer))
   );
