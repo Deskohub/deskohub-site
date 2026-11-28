@@ -326,10 +326,17 @@ const isSessionOf = async (email: string) => {
     cache: "no-store",
     credentials: "same-origin",
   });
-  const body = (response.ok ? await response.json() : null) as {
-    readonly user?: { readonly email?: string };
-  } | null;
-  return body?.user?.email === email;
+  const body: unknown = response.ok ? await response.json() : null;
+  if (typeof body !== "object" || body === null || !("user" in body)) {
+    return false;
+  }
+  const { user } = body;
+  return (
+    typeof user === "object" &&
+    user !== null &&
+    "email" in user &&
+    user.email === email
+  );
 };
 
 /** Whether native validation holds a message for the input. */
@@ -463,10 +470,15 @@ const hasControlLabel = ({
   readonly label: string;
   readonly selector: string;
 }) =>
-  Array.from(document.querySelectorAll(selector)).some((control) =>
-    Array.from((control as HTMLButtonElement).labels ?? []).some(
-      (labelElement) => labelElement.textContent?.trim() === label
-    )
+  Array.from(document.querySelectorAll(selector)).some(
+    (control) =>
+      "labels" in control &&
+      control.labels instanceof NodeList &&
+      Array.from(control.labels).some(
+        (labelElement) =>
+          labelElement instanceof HTMLLabelElement &&
+          labelElement.textContent?.trim() === label
+      )
   );
 
 /** Whether a main heading reads `heading`. */

@@ -6,7 +6,7 @@ import { Effect } from "effect";
 import { accountRoleGrants } from "@/db/schema/account-role-grants";
 import { authSession } from "@/db/schema/auth";
 import { parseBetterAuthSecrets } from "@/features/account/backend/auth/auth-secrets";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { AccountRole } from "@/features/administrators/account-role";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type { E2EBrowserSession } from "../browser-session";
@@ -125,7 +125,7 @@ export const seedWorkspaceE2ESyntheticAccount = (
     yield* runDatabaseOperation(
       "seed synthetic account",
       workspaceFixtures(db).account("e2e-synthetic-account", {
-        id: account.accountId as CustomerAccountId,
+        id: customerAccountIdSchema.make(account.accountId),
         email: account.email,
         name: account.name,
         linkedCustomer: account.linkedCustomerId,
@@ -147,7 +147,12 @@ export const revokeWorkspaceE2ESyntheticAccountRoles = (
       "revoke synthetic account roles",
       db
         .delete(accountRoleGrants)
-        .where(eq(accountRoleGrants.accountId, accountId as CustomerAccountId))
+        .where(
+          eq(
+            accountRoleGrants.accountId,
+            customerAccountIdSchema.make(accountId)
+          )
+        )
     );
   });
 

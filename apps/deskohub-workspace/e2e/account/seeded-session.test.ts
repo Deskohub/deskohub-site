@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import type {
   Account,
@@ -41,12 +42,18 @@ const makeDeployedShapeAuth = (
     protocol: "https",
   }
 ) => {
-  const store = {
-    account: [] as Account[],
-    rateLimit: [] as RateLimit[],
-    session: [] as Session[],
-    user: [] as User[],
-    verification: [] as Verification[],
+  const store: {
+    account: Account[];
+    rateLimit: RateLimit[];
+    session: Session[];
+    user: User[];
+    verification: Verification[];
+  } = {
+    account: [],
+    rateLimit: [],
+    session: [],
+    user: [],
+    verification: [],
   };
   const auth = betterAuth({
     ...authOptions,
@@ -169,8 +176,8 @@ describe("workspace e2e seeded sessions", () => {
       } catch (cause) {
         failure = cause;
       }
-      expect(failure).toBeInstanceOf(WorkspaceE2EError);
-      const message = (failure as WorkspaceE2EError).message;
+      assert(failure instanceof WorkspaceE2EError);
+      const { message } = failure;
       expect(message).toContain("Preview-only BETTER_AUTH_SECRETS");
       expect(message).toContain("never the Production value");
       if (value) expect(message).not.toContain(value);

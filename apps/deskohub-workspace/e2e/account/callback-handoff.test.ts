@@ -3,7 +3,7 @@ import {
   beforeEach,
   describe,
   expect,
-  mock,
+  jest,
   spyOn,
   test,
 } from "bun:test";
@@ -16,6 +16,14 @@ import {
   rejectionOf,
 } from "@/shared/testing/promise-outcome.test-utils";
 import { workspaceE2ETimeouts } from "../timeouts";
+import {
+  accountCallbackHandoff,
+  type CallbackHandoffExpectation,
+  type CallbackHandoffLocator,
+  type CallbackHandoffPage,
+  reviewCallbackHandoff,
+} from "./callback-handoff";
+import type { AccountReviewDestination } from "./review-screenshots";
 
 const baseUrl = "https://deskohub-workspace-review.example.test";
 const review = { baseUrl, screenshots: true } as const;
@@ -23,8 +31,8 @@ const reviewWithoutScreenshots = { baseUrl, screenshots: false } as const;
 const accountUrl = `${baseUrl}/en-US/account?_rsc=synthetic-cache-key`;
 const callbackUrl = `${baseUrl}/en-US/auth/callback`;
 const attemptUuid = "0f0a9c1e-7b62-4c8d-9e21-53ab2f0d4c7a";
-const fakeMainFrame = {} as Playwright.Frame;
-const fakeSubFrame = {} as Playwright.Frame;
+const fakeMainFrame = {};
+const fakeSubFrame = {};
 const callbackHandoffFailureMessage =
   "Account callback handoff verification failed";
 const englishCard = {
@@ -52,21 +60,34 @@ const accountReviewArtifactDirectory = resolve(
 );
 
 /**
- * Adapter seam control: the receipt-backed document review is mocked so the
+ * The receipt-backed document review is supplied by the fixture so the
  * wrapper's document branch can be exercised without a CDP session, while the
  * RSC branch keeps its locator-based fakes.
  */
-const documentReviewControl = {
+const documentReviewControl: {
+  captureCalls: number;
+  disposeCalls: number;
+  failCapture: boolean;
+  failValidate: boolean;
+  failValidateFromCall: number;
+  pixels: Buffer;
+  prepareCalls: number;
+  preparedLanding: CallbackHandoffExpectation | undefined;
+  preparedViewport: Playwright.ViewportSize | null;
+  timeline: string[];
+  validateCalls: number;
+  reset(): void;
+} = {
   captureCalls: 0,
   disposeCalls: 0,
   failCapture: false,
   failValidate: false,
-  failValidateFromCall: Number.POSITIVE_INFINITY as number,
+  failValidateFromCall: Number.POSITIVE_INFINITY,
   pixels: Buffer.from("adapter-document-png"),
   prepareCalls: 0,
-  preparedLanding: undefined as unknown,
-  preparedViewport: null as Playwright.ViewportSize | null,
-  timeline: [] as string[],
+  preparedLanding: undefined,
+  preparedViewport: null,
+  timeline: [],
   validateCalls: 0,
   reset: () => {
     documentReviewControl.captureCalls = 0;
@@ -82,14 +103,13 @@ const documentReviewControl = {
   },
 };
 
-mock.module("./callback-document-review", () => ({
-  callbackDocumentReviewViewport: { width: 1440, height: 1000 },
-  prepareCallbackDocumentReview: async (
-    page: Playwright.Page,
-    _baseOrigin: string,
-    landing: unknown,
-    viewport: Playwright.ViewportSize | null
-  ) => {
+type HandoffPage = CallbackHandoffPage<CallbackHandoffLocator>;
+type DestinationRouteHandler = Parameters<HandoffPage["route"]>[1];
+type PrepareDocumentReview = Parameters<typeof reviewCallbackHandoff>[3];
+
+const prepareDocumentForFakePage =
+  (page: HandoffPage): PrepareDocumentReview =>
+  async (_baseOrigin, landing, viewport) => {
     documentReviewControl.prepareCalls += 1;
     documentReviewControl.preparedLanding = landing;
     documentReviewControl.preparedViewport = viewport && { ...viewport };
@@ -118,12 +138,21 @@ mock.module("./callback-document-review", () => ({
         documentReviewControl.timeline.push("adapter-dispose");
       },
     };
-  },
-}));
+  };
 
-const { accountCallbackHandoff, withCallbackHandoffReview } = await import(
-  "./callback-handoff"
-);
+const runHandoffReview = (
+  page: HandoffPage,
+  destination: AccountReviewDestination,
+  runCase: () => Promise<void>,
+  expectation?: Parameters<typeof reviewCallbackHandoff>[4]
+) =>
+  reviewCallbackHandoff(
+    page,
+    destination,
+    runCase,
+    prepareDocumentForFakePage(page),
+    expectation
+  );
 
 type CallbackFakePageOptions = {
   /** The signed-in card the page renders; English account copy by default. */
@@ -152,7 +181,7 @@ type CallbackFakePage = {
   readonly dispatch: (
     url: string,
     options?: {
-      readonly frame?: Playwright.Frame;
+      readonly frame?: object;
       readonly headers?: Record<string, string>;
       readonly isNavigationRequest?: boolean;
       readonly method?: string;
@@ -160,8 +189,8 @@ type CallbackFakePage = {
       readonly resourceType?: string;
     }
   ) => Promise<boolean>;
-  readonly events: () => readonly string[];
-  readonly page: Playwright.Page;
+  readonly events: () => string[];
+  readonly page: HandoffPage;
   readonly releaseRoute: () => void;
   readonly routeInstallArguments: readonly unknown[][];
   readonly routeStarted: Promise<void>;
@@ -169,7 +198,7 @@ type CallbackFakePage = {
   readonly releaseUnroute: () => void;
   readonly setUrl: (url: string) => void;
   readonly continueStarted: Promise<void>;
-  readonly screenshotCalls: readonly Record<string, unknown>[];
+  readonly screenshotCalls: readonly Parameters<HandoffPage["screenshot"]>[0][];
   readonly screenshotStarted: Promise<void>;
   readonly unrouteArguments: readonly unknown[][];
   readonly unrouteStarted: Promise<void>;
@@ -184,85 +213,66 @@ const makeCallbackFakePage = (
     ...initialViewport,
   };
   let routeMatcher: ((url: URL) => boolean) | undefined;
-  let routeHandler: Parameters<Playwright.Page["route"]>[1] | undefined;
+  let routeHandler: DestinationRouteHandler | undefined;
   let continueCallCount = 0;
   let unrouteCallCount = 0;
   let currentUrl = callbackUrl;
   const continueArguments: unknown[][] = [];
   const events: string[] = [];
-  const screenshotCalls: Record<string, unknown>[] = [];
+  const screenshotCalls: Parameters<HandoffPage["screenshot"]>[0][] = [];
   const routeInstallArguments: unknown[][] = [];
   const unrouteArguments: unknown[][] = [];
   const waitTimeouts: number[] = [];
-  let resolveContinue!: () => void;
   let continueReleased = !options.deferContinue;
-  const continueReady = new Promise<void>((resolve) => {
-    resolveContinue = resolve;
-  });
-  let resolveContinueStarted!: () => void;
-  const continueStarted = new Promise<void>((resolve) => {
-    resolveContinueStarted = resolve;
-  });
-  let resolveRoute!: () => void;
+  const { promise: continueReady, resolve: resolveContinue } =
+    Promise.withResolvers<void>();
+  const { promise: continueStarted, resolve: resolveContinueStarted } =
+    Promise.withResolvers<void>();
   let routeReleased = !options.deferRoute;
-  const routeReady = new Promise<void>((resolve) => {
-    resolveRoute = resolve;
-  });
-  let resolveRouteStarted!: () => void;
-  const routeStarted = new Promise<void>((resolve) => {
-    resolveRouteStarted = resolve;
-  });
-  let resolveScreenshotStarted!: () => void;
-  const screenshotStarted = new Promise<void>((resolve) => {
-    resolveScreenshotStarted = resolve;
-  });
-  let resolveUnroute!: () => void;
+  const { promise: routeReady, resolve: resolveRoute } =
+    Promise.withResolvers<void>();
+  const { promise: routeStarted, resolve: resolveRouteStarted } =
+    Promise.withResolvers<void>();
+  const { promise: screenshotStarted, resolve: resolveScreenshotStarted } =
+    Promise.withResolvers<void>();
   let unrouteReleased = !options.deferUnroute;
-  const unrouteReady = new Promise<void>((resolve) => {
-    resolveUnroute = resolve;
-  });
-  let resolveUnrouteStarted!: () => void;
-  const unrouteStarted = new Promise<void>((resolve) => {
-    resolveUnrouteStarted = resolve;
-  });
+  const { promise: unrouteReady, resolve: resolveUnroute } =
+    Promise.withResolvers<void>();
+  const { promise: unrouteStarted, resolve: resolveUnrouteStarted } =
+    Promise.withResolvers<void>();
 
-  const loadingElement = Object.assign(
-    {} as Playwright.ElementHandle<HTMLElement>,
-    {
-      evaluate: async () => {
-        events.push("dom-check");
-        return options.loadingConnected !== false;
-      },
-    }
-  );
+  const loadingElement = {
+    evaluate: async () => {
+      events.push("dom-check");
+      return options.loadingConnected !== false;
+    },
+  };
   const card = options.card ?? englishCard;
-  const makeLocator = (kind: string): Playwright.Locator =>
-    Object.assign({} as Playwright.Locator, {
-      boundingBox: async () => {
-        if (kind === "main") return { height: 800, width: 1_000, x: 0, y: 0 };
-        return { height: 422, width: 512, x: 0, y: 0 };
-      },
-      count: async () =>
-        kind === "card-title" ? (options.titleCount ?? 1) : 1,
-      elementHandle: async () => loadingElement,
-      first: () => makeLocator(kind),
-      locator: (selector: string) =>
-        makeLocator(selector === "h1" ? "card-title" : "card-body"),
-      // Surrounding whitespace is trimmed before comparison.
-      textContent: async () =>
-        `\n  ${kind === "card-title" ? card.title : card.body} `,
-      waitFor: async (waitOptions: { readonly timeout?: number }) => {
-        events.push(`wait:${kind}`);
-        waitTimeouts.push(waitOptions.timeout ?? -1);
-        if (kind === "loading-card" && options.failLoadingWait)
-          throw new Error("raw locator failure");
-        if (kind === "card-title" && options.hiddenTitle)
-          throw new Error("raw hidden heading wait failure");
-        if (kind === "other-status") throw new Error("raw status wait failure");
-      },
-    });
+  const makeLocator = (kind: string): CallbackHandoffLocator => ({
+    boundingBox: async () => {
+      if (kind === "main") return { height: 800, width: 1_000, x: 0, y: 0 };
+      return { height: 422, width: 512, x: 0, y: 0 };
+    },
+    count: async () => (kind === "card-title" ? (options.titleCount ?? 1) : 1),
+    elementHandle: async () => loadingElement,
+    first: () => makeLocator(kind),
+    locator: (selector: string) =>
+      makeLocator(selector === "h1" ? "card-title" : "card-body"),
+    // Surrounding whitespace is trimmed before comparison.
+    textContent: async () =>
+      `\n  ${kind === "card-title" ? card.title : card.body} `,
+    waitFor: async (waitOptions: { readonly timeout?: number }) => {
+      events.push(`wait:${kind}`);
+      waitTimeouts.push(waitOptions.timeout ?? -1);
+      if (kind === "loading-card" && options.failLoadingWait)
+        throw new Error("raw locator failure");
+      if (kind === "card-title" && options.hiddenTitle)
+        throw new Error("raw hidden heading wait failure");
+      if (kind === "other-status") throw new Error("raw status wait failure");
+    },
+  });
 
-  const page = Object.assign({} as Playwright.Page, {
+  const page: HandoffPage = {
     evaluate: async () => {
       events.push("fonts-ready");
       options.onFontsReady?.();
@@ -275,18 +285,15 @@ const makeCallbackFakePage = (
     },
     locator: (selector: string) =>
       makeLocator(selector === "main" ? "main" : "loading-card"),
-    route: async (
-      matcher: unknown,
-      handler: Parameters<Playwright.Page["route"]>[1]
-    ) => {
+    route: async (matcher, handler) => {
       events.push("route-install");
       routeInstallArguments.push([matcher, handler]);
-      routeMatcher = matcher as (url: URL) => boolean;
+      routeMatcher = matcher;
       routeHandler = handler;
       resolveRouteStarted();
       if (!routeReleased) await routeReady;
     },
-    screenshot: async (screenshotOptions: Record<string, unknown>) => {
+    screenshot: async (screenshotOptions) => {
       events.push("screenshot");
       screenshotCalls.push(screenshotOptions);
       resolveScreenshotStarted();
@@ -313,14 +320,14 @@ const makeCallbackFakePage = (
     url: () => currentUrl,
     viewportSize: () => currentViewport,
     mainFrame: () => fakeMainFrame,
-  });
+  };
 
   const dispatch: CallbackFakePage["dispatch"] = async (
     url,
     requestOptions = {}
   ) => {
     if (!routeMatcher?.(new URL(url))) return false;
-    const route = Object.assign({} as Playwright.Route, {
+    const route: Parameters<DestinationRouteHandler>[0] = {
       continue: async (...args: unknown[]) => {
         continueCallCount += 1;
         continueArguments.push(args);
@@ -329,15 +336,15 @@ const makeCallbackFakePage = (
         if (!continueReleased) await continueReady;
         if (options.continueError) throw options.continueError;
       },
-    });
-    const request = Object.assign({} as Playwright.Request, {
+    };
+    const request: Parameters<DestinationRouteHandler>[1] = {
       frame: () => requestOptions.frame ?? fakeMainFrame,
       headers: () => requestOptions.headers ?? { rsc: "1" },
       isNavigationRequest: () => requestOptions.isNavigationRequest ?? false,
       method: () => requestOptions.method ?? "GET",
       resourceType: () => requestOptions.resourceType ?? "fetch",
       url: () => url,
-    });
+    };
     if (!routeHandler)
       throw new Error("callback handoff route was not installed");
     currentUrl = requestOptions.pageUrl ?? callbackUrl;
@@ -412,39 +419,21 @@ const withControlledTimers = async (
   clock: ReturnType<typeof makeControlledClock>,
   operation: (advanceTo: (next: number) => Promise<void>) => Promise<void>
 ): Promise<void> => {
-  const realSetTimeout = globalThis.setTimeout;
-  const realClearTimeout = globalThis.clearTimeout;
-  let nextTimerId = 0;
-  const timers = new Map<
-    number,
-    { readonly callback: () => void; readonly dueAt: number }
-  >();
-  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-    const id = nextTimerId++;
-    timers.set(id, {
-      callback,
-      dueAt: clock.now() + Math.max(0, delay ?? 0),
-    });
-    return id;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {
-    timers.delete(Number(id));
-  }) as typeof clearTimeout;
+  const previousDateNow = Date.now;
+  jest.useFakeTimers({ now: clock.now() });
 
   const advanceTo = async (next: number) => {
+    const elapsed = next - clock.now();
     clock.advanceTo(next);
-    for (const [id, timer] of [...timers]) {
-      if (timer.dueAt > next || !timers.delete(id)) continue;
-      timer.callback();
-      await flushMicrotasks();
-    }
+    jest.advanceTimersByTime(elapsed);
+    await flushMicrotasks();
   };
 
   try {
     await operation(advanceTo);
   } finally {
-    globalThis.setTimeout = realSetTimeout;
-    globalThis.clearTimeout = realClearTimeout;
+    jest.useRealTimers();
+    Date.now = previousDateNow;
   }
 };
 
@@ -466,7 +455,7 @@ describe("account callback handoff review", () => {
   test("captures only the first qualifying GET before forwarding it", async () => {
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       await fakePage.dispatch(accountUrl);
       await fakePage.dispatch(`${baseUrl}/en-US/account?_rsc=second`);
     });
@@ -496,7 +485,7 @@ describe("account callback handoff review", () => {
     });
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       await fakePage.dispatch(accountUrl);
     });
 
@@ -517,7 +506,7 @@ describe("account callback handoff review", () => {
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => {
+        runHandoffReview(fakePage.page, review, async () => {
           void fakePage.dispatch(accountUrl);
         })
       )
@@ -529,10 +518,8 @@ describe("account callback handoff review", () => {
   });
 
   test("discards a late screenshot and preserves the case failure", async () => {
-    let resolveScreenshot!: () => void;
-    const screenshotReady = new Promise<void>((resolve) => {
-      resolveScreenshot = resolve;
-    });
+    const { promise: screenshotReady, resolve: resolveScreenshot } =
+      Promise.withResolvers<void>();
     const fakePage = makeCallbackFakePage({
       onScreenshot: () => screenshotReady,
     });
@@ -544,16 +531,12 @@ describe("account callback handoff review", () => {
     process.on("unhandledRejection", onUnhandledRejection);
 
     try {
-      const wrapped = withCallbackHandoffReview(
-        fakePage.page,
-        review,
-        async () => {
-          void fakePage.dispatch(accountUrl);
-          await fakePage.screenshotStarted;
-          fakePage.setUrl(`${baseUrl}/en-US/account`);
-          throw runCaseFailure;
-        }
-      );
+      const wrapped = runHandoffReview(fakePage.page, review, async () => {
+        void fakePage.dispatch(accountUrl);
+        await fakePage.screenshotStarted;
+        fakePage.setUrl(`${baseUrl}/en-US/account`);
+        throw runCaseFailure;
+      });
 
       expect(await rejectionOf(wrapped)).toBe(runCaseFailure);
       expect(fakePage.screenshotCalls).toHaveLength(1);
@@ -574,7 +557,7 @@ describe("account callback handoff review", () => {
   test("qualifies only a real GET without prefetch headers", async () => {
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       await fakePage.dispatch(accountUrl, {
         headers: { rsc: "1" },
         method: "POST",
@@ -633,7 +616,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(fakePage.page, review, async () => {
+          runHandoffReview(fakePage.page, review, async () => {
             await fakePage.dispatch(accountUrl, requestOverrides);
           })
         )
@@ -647,9 +630,9 @@ describe("account callback handoff review", () => {
 
   test("reviews a held main-frame document through the adapter before forwarding", async () => {
     const fakePage = makeCallbackFakePage();
-    documentReviewControl.timeline = fakePage.events() as string[];
+    documentReviewControl.timeline = fakePage.events();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       documentReviewControl.timeline.push("run-case");
       await fakePage.dispatch(accountUrl, {
         headers: {},
@@ -691,11 +674,11 @@ describe("account callback handoff review", () => {
   test("fails closed on a failed adapter receipt and still forwards once", async () => {
     const fakePage = makeCallbackFakePage();
     documentReviewControl.failValidate = true;
-    documentReviewControl.timeline = fakePage.events() as string[];
+    documentReviewControl.timeline = fakePage.events();
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => {
+        runHandoffReview(fakePage.page, review, async () => {
           await fakePage.dispatch(accountUrl, {
             headers: {},
             isNavigationRequest: true,
@@ -720,11 +703,11 @@ describe("account callback handoff review", () => {
   test("does not persist when the context is invalidated between mkdir and write", async () => {
     const fakePage = makeCallbackFakePage();
     documentReviewControl.failValidateFromCall = 3;
-    documentReviewControl.timeline = fakePage.events() as string[];
+    documentReviewControl.timeline = fakePage.events();
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => {
+        runHandoffReview(fakePage.page, review, async () => {
           await fakePage.dispatch(accountUrl, {
             headers: {},
             isNavigationRequest: true,
@@ -751,7 +734,7 @@ describe("account callback handoff review", () => {
   test("accepts a callback URL with exactly one canonical attempt parameter", async () => {
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       await fakePage.dispatch(accountUrl, {
         pageUrl: `${callbackUrl}?attempt=${attemptUuid}`,
       });
@@ -783,7 +766,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(fakePage.page, review, async () => {
+          runHandoffReview(fakePage.page, review, async () => {
             await fakePage.dispatch(accountUrl, { pageUrl });
           })
         )
@@ -811,7 +794,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(fakePage.page, review, async () => {
+          runHandoffReview(fakePage.page, review, async () => {
             await fakePage.dispatch(accountUrl);
           })
         )
@@ -827,7 +810,7 @@ describe("account callback handoff review", () => {
   test("waits for the signed-in heading and body before capturing", async () => {
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(fakePage.page, review, async () => {
+    await runHandoffReview(fakePage.page, review, async () => {
       await fakePage.dispatch(accountUrl);
     });
 
@@ -844,7 +827,7 @@ describe("account callback handoff review", () => {
   test("holds the Czech return target's RSC request and captures its review", async () => {
     const fakePage = makeCallbackFakePage({ card: czechCard });
 
-    await withCallbackHandoffReview(
+    await runHandoffReview(
       fakePage.page,
       review,
       async () => {
@@ -877,7 +860,7 @@ describe("account callback handoff review", () => {
   test("holds the Czech return target's document and persists its review", async () => {
     const fakePage = makeCallbackFakePage({ card: czechCard });
 
-    await withCallbackHandoffReview(
+    await runHandoffReview(
       fakePage.page,
       review,
       async () => {
@@ -916,7 +899,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(
+          runHandoffReview(
             fakePage.page,
             review,
             async () => {
@@ -966,7 +949,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(
+          runHandoffReview(
             fakePage.page,
             review,
             async () => {
@@ -991,7 +974,7 @@ describe("account callback handoff review", () => {
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(
+        runHandoffReview(
           fakePage.page,
           review,
           async () => {
@@ -1011,7 +994,7 @@ describe("account callback handoff review", () => {
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => undefined)
+        runHandoffReview(fakePage.page, review, async () => undefined)
       )
     ).toThrow(callbackHandoffFailureMessage);
 
@@ -1033,13 +1016,9 @@ describe("account callback handoff review", () => {
         process.on("unhandledRejection", onUnhandledRejection);
 
         try {
-          const wrapped = withCallbackHandoffReview(
-            fakePage.page,
-            review,
-            async () => {
-              runCaseCalls += 1;
-            }
-          );
+          const wrapped = runHandoffReview(fakePage.page, review, async () => {
+            runCaseCalls += 1;
+          });
           await fakePage.routeStarted;
           await advanceTo(workspaceE2ETimeouts.browserAction);
           expect(await outcomeOf(wrapped)).toThrow(
@@ -1077,7 +1056,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(fakePage.page, review, async () => {
+          runHandoffReview(fakePage.page, review, async () => {
             await fakePage.dispatch(accountUrl);
           })
         )
@@ -1097,7 +1076,7 @@ describe("account callback handoff review", () => {
 
     expect(
       await rejectionOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => {
+        runHandoffReview(fakePage.page, review, async () => {
           await fakePage.dispatch(accountUrl);
           throw runCaseFailure;
         })
@@ -1113,7 +1092,7 @@ describe("account callback handoff review", () => {
 
     expect(
       await outcomeOf(
-        withCallbackHandoffReview(fakePage.page, review, async () => {
+        runHandoffReview(fakePage.page, review, async () => {
           await fakePage.dispatch(accountUrl);
         })
       )
@@ -1135,7 +1114,7 @@ describe("account callback handoff review", () => {
 
       expect(
         await outcomeOf(
-          withCallbackHandoffReview(fakePage.page, review, async () => {
+          runHandoffReview(fakePage.page, review, async () => {
             await fakePage.dispatch(accountUrl);
           })
         )
@@ -1169,15 +1148,11 @@ describe("account callback handoff review", () => {
         process.on("unhandledRejection", onUnhandledRejection);
 
         try {
-          const wrapped = withCallbackHandoffReview(
-            fakePage.page,
-            review,
-            async () => {
-              void fakePage.dispatch(accountUrl);
-              await fakePage.screenshotStarted;
-              throw runCaseFailure;
-            }
-          );
+          const wrapped = runHandoffReview(fakePage.page, review, async () => {
+            void fakePage.dispatch(accountUrl);
+            await fakePage.screenshotStarted;
+            throw runCaseFailure;
+          });
           let settled = false;
           void wrapped.then(
             () => {
@@ -1232,9 +1207,9 @@ describe("account callback handoff without the review opt-in", () => {
 
   test("still validates the held handoff document before forwarding it", async () => {
     const fakePage = makeCallbackFakePage();
-    documentReviewControl.timeline = fakePage.events() as string[];
+    documentReviewControl.timeline = fakePage.events();
 
-    await withCallbackHandoffReview(
+    await runHandoffReview(
       fakePage.page,
       reviewWithoutScreenshots,
       async () => {
@@ -1260,7 +1235,7 @@ describe("account callback handoff without the review opt-in", () => {
   test("still checks the loading state behind a held RSC request", async () => {
     const fakePage = makeCallbackFakePage();
 
-    await withCallbackHandoffReview(
+    await runHandoffReview(
       fakePage.page,
       reviewWithoutScreenshots,
       async () => {

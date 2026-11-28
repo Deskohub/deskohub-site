@@ -11,7 +11,7 @@ import {
   parseTrackedSource,
   stringLiterals,
 } from "../../scripts/shared/source-ast";
-import { formatWorkspaceE2EFailure, type WorkspaceE2EError } from "../errors";
+import { formatWorkspaceE2EFailure, WorkspaceE2EError } from "../errors";
 import {
   classifyWorkspaceE2EMarketingConsentPersistence,
   matchesRejectedReplayAlerts,
@@ -48,14 +48,14 @@ const makeFakePage = (
     readonly options: GotoOptions;
     readonly url: string;
   }> = [];
-  const page = Object.assign({} as Page, {
+  const page: Pick<Page, "goto" | "url"> = {
     goto: async (url: string, options: GotoOptions) => {
       gotoCalls.push({ options, url });
       currentUrl = (await goto(url, options)) ?? url;
       return null;
     },
     url: () => currentUrl,
-  });
+  };
 
   return { gotoCalls, page };
 };
@@ -66,10 +66,7 @@ type PromiseGate = {
 };
 
 const makePromiseGate = (): PromiseGate => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
+  const { promise, resolve } = Promise.withResolvers<void>();
   return { promise, resolve };
 };
 
@@ -495,7 +492,9 @@ describe("workspace marketing preferences helper", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (!Exit.isFailure(exit)) return;
-    const failure = Cause.squash(exit.cause) as WorkspaceE2EError;
+    const failure = Cause.squash(exit.cause);
+    if (!(failure instanceof WorkspaceE2EError))
+      throw new Error("expected a Workspace E2E error");
     expect(failure.operation).toBe(knownLabel);
     expect(failure.cause).toBeUndefined();
     expect(failure.causes).toBeUndefined();
@@ -528,7 +527,9 @@ describe("workspace marketing preferences helper", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (!Exit.isFailure(exit)) return;
-    const failure = Cause.squash(exit.cause) as WorkspaceE2EError;
+    const failure = Cause.squash(exit.cause);
+    if (!(failure instanceof WorkspaceE2EError))
+      throw new Error("expected a Workspace E2E error");
     expect(failure.operation).toBeUndefined();
     expect(failure.cause).toBeUndefined();
     expect(failure.causes).toBeUndefined();
@@ -760,7 +761,8 @@ describe("workspace marketing preferences helper", () => {
     }
 
     expect(failure).toBeInstanceOf(Error);
-    const safeFailure = failure as Error;
+    if (!(failure instanceof Error)) throw new Error("expected an error");
+    const safeFailure = failure;
     expect(safeFailure.message).toBe(browserFailureMessage);
     expect("cause" in safeFailure).toBe(false);
     expect(String(safeFailure)).not.toContain(unsafeUrl);

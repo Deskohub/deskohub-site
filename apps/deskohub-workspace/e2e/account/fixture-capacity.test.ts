@@ -2,8 +2,12 @@ import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposEmployeeIdSchema,
+} from "@deskohub/dotypos";
 import { Cause, Effect, Exit } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { getDatasourceConfig } from "../config";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { formatWorkspaceE2EFailure } from "../errors";
@@ -177,7 +181,10 @@ for (const [family, create] of [
         create(
           {
             ...config,
-            dotypos: { ...config.dotypos, employeeId: "another-employee" },
+            dotypos: {
+              ...config.dotypos,
+              employeeId: DotyposEmployeeIdSchema.make("another-employee"),
+            },
           },
           { customerId }
         )
@@ -207,7 +214,10 @@ for (const [family, create] of [
       expect(created()).toBe(1);
       setSystemTime(now + fixtureCapacityLifetime);
       await Effect.runPromise(
-        cancelSyntheticReservation(config, reservation.reservationId!)
+        cancelSyntheticReservation(
+          config,
+          requireValue(reservation.reservationId, "synthetic reservation ID")
+        )
       );
       expect(cancelled()).toBe(1);
     });

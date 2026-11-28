@@ -95,7 +95,7 @@ export const isExactCallbackUrlString = (
 };
 
 export const isExactCallbackUrl = (
-  page: Playwright.Page,
+  page: Pick<Playwright.Page, "url">,
   baseOrigin: string,
   landing: CallbackLanding = {}
 ): boolean => {

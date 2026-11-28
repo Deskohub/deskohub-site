@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -8,16 +9,21 @@ import { customerAccounts } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
 import { CustomerAccountRepository } from "@/features/account/backend/customer-account.repository";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { E2EDatabase } from "../integrations/database.service";
 import { verifyUnlimitedRecoveryBuyer } from "../playwright-checkout/unlimited-pass-recovery-evidence";
-import { removeSyntheticAuthUser } from "./auth-rows";
+import {
+  findLinkedDotyposCustomerId,
+  removeSyntheticAccountLink,
+  removeSyntheticAuthUser,
+} from "./auth-rows";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const insertAuthUser = (id: string) =>
-  workspaceFixtures(testDatabase!.db)
+  workspaceFixtures(requireValue(testDatabase, "disposable Postgres").db)
     .account("auth-rows", { id: customerAccountIdSchema.make(id) })
     .pipe(Effect.runPromise);
 
@@ -25,24 +31,26 @@ const removeAccount = (accountId: string) =>
   removeSyntheticAuthUser(accountId).pipe(
     Effect.provideService(
       E2EDatabase,
-      E2EDatabase.of({ db: testDatabase!.db })
+      E2EDatabase.of({
+        db: requireValue(testDatabase, "disposable Postgres").db,
+      })
     ),
     Effect.runPromise
   );
 
 /** The tombstone's deletion instant, null while active, undefined when absent. */
 const readDeletedAt = async (accountId: string) => {
-  const [row] = await testDatabase!.db
-    .select({ deletedAt: customerAccounts.deletedAt })
+  const [row] = await requireValue(testDatabase, "disposable Postgres")
+    .db.select({ deletedAt: customerAccounts.deletedAt })
     .from(customerAccounts)
-    .where(eq(customerAccounts.id, accountId))
+    .where(eq(customerAccounts.id, customerAccountIdSchema.make(accountId)))
     .pipe(Effect.runPromise);
   return row === undefined ? undefined : (row.deletedAt?.toString() ?? null);
 };
 
 const authUserExists = async (accountId: string) => {
-  const rows = await testDatabase!.db
-    .select({ id: authUser.id })
+  const rows = await requireValue(testDatabase, "disposable Postgres")
+    .db.select({ id: authUser.id })
     .from(authUser)
     .where(eq(authUser.id, accountId))
     .pipe(Effect.runPromise);
@@ -73,6 +81,34 @@ describe.skipIf(!testDatabase)(
       expect(await authUserExists(accountId)).toBe(false);
     });
 
+    test("clears the exact provider link while preserving the other account's link", async () => {
+      const { db } = requireValue(testDatabase, "disposable Postgres");
+      const account = customerAccountIdSchema.make(crypto.randomUUID());
+      const otherAccount = customerAccountIdSchema.make(crypto.randomUUID());
+      const customer = DotyposCustomerIdSchema.make(crypto.randomUUID());
+      const otherCustomer = DotyposCustomerIdSchema.make(crypto.randomUUID());
+      const fixtures = workspaceFixtures(db);
+      const database = E2EDatabase.of({ db });
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* fixtures.customerAccount({
+            id: account,
+            linkedCustomer: customer,
+          });
+          yield* fixtures.customerAccount({
+            id: otherAccount,
+            linkedCustomer: otherCustomer,
+          });
+          yield* removeSyntheticAccountLink(account, customer);
+          expect(yield* findLinkedDotyposCustomerId(account)).toBeUndefined();
+          expect(yield* findLinkedDotyposCustomerId(otherAccount)).toBe(
+            otherCustomer
+          );
+        }).pipe(Effect.provideService(E2EDatabase, database))
+      );
+    });
+
     test("keeps the first deletion instant when cleanup repeats", async () => {
       const accountId = crypto.randomUUID();
       await insertAuthUser(accountId);
@@ -87,7 +123,7 @@ describe.skipIf(!testDatabase)(
     test("resumes an original buyer tombstoned before its login was removed", async () => {
       const accountId = `agent-eval-${crypto.randomUUID()}`;
       await insertAuthUser(accountId);
-      const { db } = testDatabase!;
+      const { db } = requireValue(testDatabase, "disposable Postgres");
       const [login] = await Effect.runPromise(
         db.select().from(authUser).where(eq(authUser.id, accountId))
       );

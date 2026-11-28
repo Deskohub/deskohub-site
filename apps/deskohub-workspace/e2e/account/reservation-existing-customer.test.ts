@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { testEmailAddress } from "@deskohub/test-email";
-import { chromium, type Page } from "@playwright/test";
+import { chromium } from "@playwright/test";
 import type { ReservationCustomerMode } from "@/features/reservation/reservation-existing-customer";
 import { playwrightChromiumAvailable } from "../../shared/testing/playwright-browser";
 import {
@@ -32,10 +32,15 @@ type FakeState = {
 const settledSubmitKey =
   'locator:#reservation-submit[data-reservation-availability-loading="false"][data-reservation-price-loading="false"]';
 
-const contactFieldByLabel = (label: string) =>
-  ["Email", "Phone", "Name"].find((field) =>
-    new RegExp(label).test(`${field} *`)
-  );
+const contactFieldByLabel = (label: RegExp) =>
+  ["Email", "Phone", "Name"].find((field) => label.test(`${field} *`));
+
+type CustomerPage = Extract<
+  Parameters<typeof verifyReservationExistingCustomer>[0]["page"],
+  { readonly getModeButton: unknown }
+>;
+type CustomerLocator = ReturnType<CustomerPage["getByRole"]> &
+  ReturnType<CustomerPage["locator"]>;
 
 const makeFakePage = (failurePhase?: FailurePhase) => {
   const state: FakeState = { mode: "account" };
@@ -66,21 +71,18 @@ const makeFakePage = (failurePhase?: FailurePhase) => {
 
   const countFor = (key: string): number => (isVisible(key) ? 1 : 0);
 
-  const makeLocator = (key: string) => ({
+  const makeLocator = (key: string): CustomerLocator => ({
     click: async () => {
+      if (!isVisible(key)) fail();
       if (key === "button:Book for someone else") state.mode = "contact";
     },
     count: async () => countFor(key),
-    elementHandle: async () => ({
-      dispose: async () => {},
-      key,
-    }),
     first: () => makeLocator(key),
     getByText: (text: string, options: { readonly exact?: boolean }) => {
       expect(options.exact).toBe(true);
       return makeLocator(`text:${text}`);
     },
-    waitFor: async (options: { readonly state?: string }) => {
+    waitFor: async (options = {}) => {
       if (options.state === "hidden") {
         if (isVisible(key)) fail();
         return;
@@ -90,19 +92,30 @@ const makeFakePage = (failurePhase?: FailurePhase) => {
     },
   });
 
-  const page = Object.assign({} as Page, {
+  const page = {
     getByRole: (
-      role: string,
+      role: "region" | "textbox",
       options: { readonly exact?: boolean; readonly name: RegExp | string }
     ) => {
       if (role === "textbox") {
         expect(options.name).toBeInstanceOf(RegExp);
-        const field = contactFieldByLabel((options.name as RegExp).source);
+        if (!(options.name instanceof RegExp))
+          throw new Error("expected a contact field label pattern");
+        const field = contactFieldByLabel(options.name);
         if (field === undefined) throw new Error("unknown contact field");
         return makeLocator(`textbox:${field}`);
       }
       expect(options.exact).toBe(true);
       return makeLocator(`${role}:${String(options.name)}`);
+    },
+    getModeButton: (name: string) => {
+      const key = `button:${name}`;
+      return {
+        button: makeLocator(key),
+        waitForHandler: async () => {
+          if (!isVisible(key)) fail();
+        },
+      };
     },
     evaluate: async () => {},
     goto: async () => {
@@ -110,13 +123,7 @@ const makeFakePage = (failurePhase?: FailurePhase) => {
       return null;
     },
     locator: (selector: string) => makeLocator(`locator:${selector}`),
-    waitForFunction: async () => {
-      return {
-        dispose: async () => {},
-        jsonValue: async () => "ready",
-      } as never;
-    },
-  });
+  } satisfies CustomerPage;
 
   const captureReview = async (mode: ReservationCustomerMode) => {
     if (failurePhase === "contact-review" && mode === "contact") fail();

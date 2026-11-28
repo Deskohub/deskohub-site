@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Page, Request, Response } from "@playwright/test";
 import { Cause, Effect, Exit, Fiber, Option } from "effect";
 import { TestClock } from "effect/testing";
-import type { E2EBrowserSession } from "../browser-session";
 import { toWorkspaceE2EError, WorkspaceE2EError } from "../errors";
 import { withinWorkspaceE2EDeadline } from "../polling";
 import { workspaceE2ETimeouts } from "../timeouts";
@@ -13,39 +11,42 @@ const operation = "sign in analytics preference device";
 
 const never = new Promise<never>(() => undefined);
 
+type MirrorDevice = Parameters<typeof reloadDeviceUntilMirrored>[0];
+type MirrorPage = Parameters<Parameters<MirrorDevice["use"]>[1]>[0];
+type MirrorResponse = Awaited<ReturnType<MirrorPage["waitForResponse"]>>;
+type MirrorRequest = ReturnType<MirrorResponse["request"]>;
+
 const fakeRequest = (
   init: {
     readonly body?: string;
     readonly headers?: Record<string, string>;
     readonly method?: string;
   },
-  response: () => Promise<Response | null> = () => never
-) =>
-  Object.assign({} as Request, {
-    headers: () => init.headers ?? {},
-    method: () => init.method ?? "GET",
-    postData: () => init.body ?? null,
-    response,
-  });
+  response: () => Promise<MirrorResponse | null> = () => never
+): MirrorRequest => ({
+  headers: () => init.headers ?? {},
+  method: () => init.method ?? "GET",
+  postData: () => init.body ?? null,
+  response,
+});
 
 const fakeResponse = (
-  request: Request,
+  request: MirrorRequest,
   init: {
     readonly headers?: Record<string, string>;
     readonly path: string;
     readonly status: number;
   }
-) =>
-  Object.assign({} as Response, {
-    headers: () => init.headers ?? {},
-    request: () => request,
-    status: () => init.status,
-    url: () => new URL(init.path, origin).toString(),
-  });
+): MirrorResponse => ({
+  headers: () => init.headers ?? {},
+  request: () => request,
+  status: () => init.status,
+  url: () => new URL(init.path, origin).toString(),
+});
 
 /** The mirror's hydration request, whose response `respond` resolves. */
 const hydrationRequest = (
-  respond: () => Promise<Response | null> = () => never
+  respond: () => Promise<MirrorResponse | null> = () => never
 ) =>
   fakeRequest(
     {
@@ -73,8 +74,8 @@ const rateLimitedSessionRead = (retryAfterSeconds?: string) =>
 
 /** What one reload sends before the response that settles its wait. */
 type ReloadScript = {
-  readonly requests: readonly Request[];
-  readonly settles: Response;
+  readonly requests: readonly MirrorRequest[];
+  readonly settles: MirrorResponse;
 };
 
 /**
@@ -85,20 +86,20 @@ type ReloadScript = {
 const scriptedPage = (
   scripts: readonly ReloadScript[],
   reloadedAt: (index: number) => void
-) => {
-  const listeners = new Set<(request: Request) => void>();
+): MirrorPage => {
+  const listeners = new Set<(request: MirrorRequest) => void>();
   let waiter:
     | {
-        readonly accept: (response: Response) => boolean;
-        readonly resolve: (response: Response) => void;
+        readonly accept: (response: MirrorResponse) => boolean;
+        readonly resolve: (response: MirrorResponse) => void;
       }
     | undefined;
   let reloads = 0;
-  return Object.assign({} as Page, {
-    off: (_event: "request", listener: (request: Request) => void) => {
+  return {
+    off: (_event, listener) => {
       listeners.delete(listener);
     },
-    on: (_event: "request", listener: (request: Request) => void) => {
+    on: (_event, listener) => {
       listeners.add(listener);
     },
     reload: async () => {
@@ -111,11 +112,11 @@ const scriptedPage = (
       if (waiter?.accept(script.settles)) waiter.resolve(script.settles);
       return null;
     },
-    waitForResponse: (accept: (response: Response) => boolean) =>
-      new Promise<Response>((resolve) => {
+    waitForResponse: (accept) =>
+      new Promise<MirrorResponse>((resolve) => {
         waiter = { accept, resolve };
       }),
-  });
+  };
 };
 
 /**
@@ -123,22 +124,21 @@ const scriptedPage = (
  * rejected callback becomes the operation's failure, and a deadline bounds
  * the whole callback.
  */
-const sessionOver = (page: Page) =>
-  Object.assign({} as E2EBrowserSession, {
-    use: <A>(
-      label: string,
-      drive: (page: Page) => Promise<A>,
-      deadline: { readonly timeoutMs?: number } = {}
-    ) => {
-      const attempt = Effect.tryPromise({
-        catch: (cause) => toWorkspaceE2EError(label, cause),
-        try: () => drive(page),
-      });
-      return deadline.timeoutMs === undefined
-        ? attempt
-        : withinWorkspaceE2EDeadline(attempt, label, deadline.timeoutMs);
-    },
-  });
+const sessionOver = (page: MirrorPage): MirrorDevice => ({
+  use: <A>(
+    label: string,
+    drive: (page: MirrorPage) => Promise<A>,
+    deadline: { readonly timeoutMs?: number } = {}
+  ) => {
+    const attempt = Effect.tryPromise({
+      catch: (cause) => toWorkspaceE2EError(label, cause),
+      try: () => drive(page),
+    });
+    return deadline.timeoutMs === undefined
+      ? attempt
+      : withinWorkspaceE2EDeadline(attempt, label, deadline.timeoutMs);
+  },
+});
 
 /** Lets the fake page's promise callbacks run before time moves on. */
 const settlePromises = Effect.promise(
@@ -216,10 +216,8 @@ describe("analytics preference device sign-in reload", () => {
   });
 
   test("succeeds without another reload when the pending mirror request answers after a rate-limited session read", async () => {
-    let answer: (response: Response) => void = () => undefined;
-    const answered = new Promise<Response>((resolve) => {
-      answer = resolve;
-    });
+    const { promise: answered, resolve: answer } =
+      Promise.withResolvers<MirrorResponse>();
     const scripts = [
       {
         requests: [hydrationRequest(() => answered)],

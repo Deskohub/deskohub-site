@@ -62,7 +62,7 @@ const openAccountSections = (viewport?: {
       await page.addScriptTag({ content: harness.script });
       await page.getByRole("navigation", { name: navigationLabel }).waitFor();
       await page.evaluate(() => {
-        const clicks: { href: string | null; mobile: boolean }[] = [];
+        const clicks: SectionClick[] = [];
         Reflect.set(window, "__sectionClicks", clicks);
         document.addEventListener(
           "click",
@@ -92,8 +92,24 @@ const readSelection = (session: E2EBrowserSession, section: AccountSection) =>
         const rect = element?.getBoundingClientRect();
         return rect !== undefined && rect.width > 0 && rect.height > 0;
       };
+      const recordedClicks: unknown = Reflect.get(window, "__sectionClicks");
+      if (!Array.isArray(recordedClicks))
+        throw new Error("section clicks were not recorded");
+      const clicks = recordedClicks.map((click: unknown): SectionClick => {
+        if (
+          typeof click !== "object" ||
+          click === null ||
+          !("href" in click) ||
+          (typeof click.href !== "string" && click.href !== null) ||
+          !("mobile" in click) ||
+          typeof click.mobile !== "boolean"
+        ) {
+          throw new Error("invalid section click");
+        }
+        return { href: click.href, mobile: click.mobile };
+      });
       return {
-        clicks: Reflect.get(window, "__sectionClicks") as SectionClick[],
+        clicks,
         currentHrefs: Array.from(
           document.querySelectorAll('nav a[aria-current="page"]')
         )
