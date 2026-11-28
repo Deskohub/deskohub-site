@@ -16,6 +16,9 @@ const accountingDocumentSnapshotSecrets: Readonly<
   K202608: process.env.ACCOUNTING_DOCUMENT_SNAPSHOT_KEY_K202608,
 };
 
+// The Vercel stage identifies its host even when Workspace sets another stage.
+export const vercelHostStage = process.env.VERCEL_ENV;
+
 type WorkspaceRuntimeEnv = Readonly<
   Record<
     | keyof typeof workspaceServerEnvSchema.fields
@@ -176,6 +179,7 @@ export const env = createWorkspaceEnv({
   POSTHOG_PROJECT_ID: process.env.POSTHOG_PROJECT_ID,
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  UNLIMITED_AUTO_RENEWAL_PREVIEW: process.env.UNLIMITED_AUTO_RENEWAL_PREVIEW,
   VERCEL_AUTOMATION_BYPASS_SECRET: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
   K_REVISION: process.env.K_REVISION,
   VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL,
@@ -183,7 +187,7 @@ export const env = createWorkspaceEnv({
   // The deployment stage, whichever host sets it.
   VERCEL_ENV: selectDeploymentStageSetting({
     WORKSPACE_DEPLOYMENT_STAGE: process.env.WORKSPACE_DEPLOYMENT_STAGE,
-    VERCEL_ENV: process.env.VERCEL_ENV,
+    VERCEL_ENV: vercelHostStage,
   }),
   VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
   VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL,

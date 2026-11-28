@@ -130,6 +130,14 @@ const e2eEnvironmentSchema = Schema.Struct({
   WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN: optionalNonEmptyString,
   WORKSPACE_E2E_FLOWS: optionalFlowsInput,
   WORKSPACE_E2E_NIGHTLY_CASES: optionalOptIn,
+  WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: optionalOptIn,
+  WORKSPACE_E2E_RECOVER_UNLIMITED_RUN: toEnvironmentSchema(
+    Schema.optional(Schema.Literal("45856799102"))
+  ),
+  WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN: optionalNonEmptyString,
+  WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: toEnvironmentSchema(
+    Schema.optional(Schema.Literals(["en-US", "cs-CZ"]))
+  ),
   WORKSPACE_E2E_PR_NUMBER: optionalPositiveInteger,
   WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn,
   WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: optionalOptIn,
@@ -197,6 +205,14 @@ export const makeE2EEnvironment = (
       WORKSPACE_E2E_FLOWS: runtimeEnvironment.WORKSPACE_E2E_FLOWS,
       WORKSPACE_E2E_NIGHTLY_CASES:
         runtimeEnvironment.WORKSPACE_E2E_NIGHTLY_CASES,
+      WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL,
+      WORKSPACE_E2E_RECOVER_UNLIMITED_RUN:
+        runtimeEnvironment.WORKSPACE_E2E_RECOVER_UNLIMITED_RUN,
+      WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN:
+        runtimeEnvironment.WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
       WORKSPACE_E2E_PR_NUMBER: runtimeEnvironment.WORKSPACE_E2E_PR_NUMBER,
       WORKSPACE_E2E_REVIEW_SCREENSHOTS:
         runtimeEnvironment.WORKSPACE_E2E_REVIEW_SCREENSHOTS,
@@ -222,6 +238,19 @@ export const makeWorkspaceE2EEnvironment = (
     environment.WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL;
   if (!permitDatabaseUrl) {
     throw new Error("Invalid workspace E2E environment variables.");
+  }
+  if (
+    unlimitedPassAutoRenewalCaseEnabled(environment) &&
+    (environment.WORKSPACE_E2E_FLOWS !== "payments" ||
+      environment.WORKSPACE_E2E_PAYMENT_PROVIDER !== "nexi" ||
+      environment.WORKSPACE_E2E_EXECUTION_CONTEXT !== "manual" ||
+      environment.WORKSPACE_E2E_ALLOCATION_SHARD === undefined ||
+      environment.TARGET_SHA === undefined ||
+      nightlyCasesEnabled(environment))
+  ) {
+    throw new Error(
+      "Unlimited auto-renewal requires the leased exact-SHA payments flow in manual Nexi mode."
+    );
   }
   return {
     ...environment,
@@ -275,14 +304,30 @@ export const makeInstantNavigationFlowEnvironment = (
     },
     runtimeEnv: {
       WORKSPACE_E2E_FLOWS: runtimeEnvironment.WORKSPACE_E2E_FLOWS,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS:
+        runtimeEnvironment.WORKSPACE_E2E_REVIEW_SCREENSHOTS,
+      WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
     },
-    server: { WORKSPACE_E2E_FLOWS: optionalFlowsInput },
+    server: {
+      WORKSPACE_E2E_FLOWS: optionalFlowsInput,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn,
+      WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: optionalOptIn,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        e2eEnvironmentSchema.fields.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
+    },
   });
 
 export const workspaceE2EFlowSelection = (
   environment: Pick<E2EEnvironment, "WORKSPACE_E2E_FLOWS">
 ): WorkspaceE2EFlowSelection =>
   resolveWorkspaceE2EFlowSelection(environment.WORKSPACE_E2E_FLOWS);
+
+export const unlimitedPassAutoRenewalCaseEnabled = (
+  environment: Pick<E2EEnvironment, "WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL">
+): boolean => environment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL === "true";
 
 /**
  * Review screenshots are PR-review artifacts, not test evidence, so a run
@@ -291,6 +336,29 @@ export const workspaceE2EFlowSelection = (
 export const reviewScreenshotsEnabled = (
   environment: Pick<E2EEnvironment, "WORKSPACE_E2E_REVIEW_SCREENSHOTS">
 ): boolean => environment.WORKSPACE_E2E_REVIEW_SCREENSHOTS === "true";
+
+type UnlimitedPassReviewEnvironment = Pick<
+  E2EEnvironment,
+  | "WORKSPACE_E2E_REVIEW_SCREENSHOTS"
+  | "WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL"
+  | "WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE"
+>;
+
+export const unlimitedPassReviewLocale = (
+  environment: UnlimitedPassReviewEnvironment
+) =>
+  unlimitedPassAutoRenewalCaseEnabled(environment) &&
+  reviewScreenshotsEnabled(environment)
+    ? (environment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE ?? "en-US")
+    : undefined;
+
+export const unlimitedPassWorkspaceReviewOnly = (
+  environment: UnlimitedPassReviewEnvironment
+) => unlimitedPassReviewLocale(environment) === "cs-CZ";
+
+export const unlimitedPassReviewOnly = (
+  environment: UnlimitedPassReviewEnvironment
+) => unlimitedPassReviewLocale(environment) !== undefined;
 
 /**
  * Nightly cases are too slow for the per-PR gate, so a run includes them

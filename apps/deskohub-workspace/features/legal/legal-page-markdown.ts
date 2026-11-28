@@ -4,7 +4,7 @@ import {
   markdownHeading,
   markdownParagraph,
 } from "@/shared/markdown/markdown";
-import { getLegalDocument } from "./content";
+import { getServedLegalDocument } from "./content.server";
 import type { LegalDocumentKey } from "./legal-document-summaries";
 import { legalNodeToPhrasing } from "./legal-node-phrasing";
 
@@ -13,7 +13,7 @@ export const legalPageMarkdown = (
   locale: Locale,
   documentKey: LegalDocumentKey
 ): MarkdownBlocks => {
-  const document = getLegalDocument(locale, documentKey);
+  const document = getServedLegalDocument(locale, documentKey);
 
   return [
     markdownHeading(1, document.title),

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { type ReactNode, Suspense } from "react";
+import { loadAccountPassSection } from "@/features/account/account-pass-section.server";
 import { AccountLayoutShell } from "@/features/account/components/account-layout-shell";
 import { AccountLoading } from "@/features/account/components/account-loading";
 import { arePasskeysEnabled } from "@/features/account/server/account-release-gates.server";
@@ -38,13 +39,18 @@ async function AccountLayoutContent({
 }: AccountLayoutProps & { readonly locale: Locale }) {
   await connection();
 
-  const [passkeysEnabled, referralsEnabled, passesEnabled, signedIn] =
+  const [passkeysEnabled, referralsEnabled, passPurchasesEnabled, signedIn] =
     await Promise.all([
       arePasskeysEnabled(),
       areReferralsEnabled(),
       isCoworkPassesPageOpenAfterConnection(),
       isCustomerSignedIn(),
     ]);
+
+  const passesEnabled =
+    passPurchasesEnabled ||
+    (signedIn &&
+      Boolean((await loadAccountPassSection(locale, false)).loadPasses));
 
   return (
     <>

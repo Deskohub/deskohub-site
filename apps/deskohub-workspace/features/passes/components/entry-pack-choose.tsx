@@ -52,6 +52,7 @@ export function EntryPackChoose({
       >
         <PassTierInput
           locale={locale}
+          kind="entry-pack"
           tier={tier}
           onChange={(next) => onChange({ ...product, tier: next })}
           priceForTier={(option) => {

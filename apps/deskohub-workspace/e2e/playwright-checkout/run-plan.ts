@@ -130,9 +130,10 @@ const cleanupJournalSchema = Schema.Struct({
 });
 
 const decodeRunPlan = Schema.decodeOption(Schema.fromJsonString(runPlanSchema));
-const decodeCleanupJournal = Schema.decodeOption(
+const decodeCleanupJournalJson = Schema.decodeOption(
   Schema.fromJsonString(cleanupJournalSchema)
 );
+const decodeCleanupJournal = Schema.decodeUnknownOption(cleanupJournalSchema);
 type WorkspaceE2ECleanupJournal = typeof cleanupJournalSchema.Type;
 
 export const writeWorkspaceE2ERunPlan = async (plan: WorkspaceE2ERunPlan) =>
@@ -169,11 +170,14 @@ export const readWorkspaceE2ECaseJournals = async (
   const journals = await Promise.all(
     caseIds.map(async (caseId) => {
       try {
-        const journal = parseCleanupJournal(
-          await readFile(resolve(journalRoot, `${caseId}.json`), "utf8")
+        const journal = Option.getOrThrowWith(
+          decodeCleanupJournalJson(
+            await readFile(resolve(journalRoot, `${caseId}.json`), "utf8")
+          ),
+          invalidCleanupJournal
         );
         if (journal.caseId !== caseId) {
-          throw new Error("Invalid workspace E2E cleanup journal");
+          throw invalidCleanupJournal();
         }
         return journal;
       } catch (cause) {
@@ -209,11 +213,10 @@ const parseRunPlan = (serialized: string): WorkspaceE2ERunPlan => {
   );
 };
 
-const parseCleanupJournal = (
-  serialized: string
-): WorkspaceE2ECleanupJournal => {
-  return Option.getOrThrowWith(
-    decodeCleanupJournal(serialized),
-    () => new Error("Invalid workspace E2E cleanup journal")
-  );
-};
+const invalidCleanupJournal = () =>
+  new Error("Invalid workspace E2E cleanup journal");
+
+export const parseWorkspaceE2ECaseJournal = (
+  value: unknown
+): WorkspaceE2ECleanupJournal =>
+  Option.getOrThrowWith(decodeCleanupJournal(value), invalidCleanupJournal);

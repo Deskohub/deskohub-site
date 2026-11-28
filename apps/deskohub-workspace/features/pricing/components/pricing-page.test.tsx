@@ -47,6 +47,7 @@ mock.module("@/shared/components/guarded-link", () => ({
 }));
 
 let passesRelease: GlobalRelease = "off";
+let autoRenewalEnabled = false;
 const isCoworkPassesPageOpenAfterConnection = mock(async () => false);
 mock.module("@/features/feature-flags/backend/global-release.server", () => ({
   loadGlobalRelease: async () => passesRelease,
@@ -56,6 +57,10 @@ mock.module(
   () => ({
     isCoworkPassesPageOpenAfterConnection,
   })
+);
+mock.module(
+  "@/features/passes/backend/unlimited-auto-renewal-preview.server",
+  () => ({ isUnlimitedAutoRenewalPreviewEnabled: () => autoRenewalEnabled })
 );
 
 type PriceListLoad = (
@@ -140,11 +145,24 @@ const visibleLinks = (html: string) =>
     link.getAttribute("href")
   );
 
+const passOffers = (html: string) =>
+  [
+    ...new DOMParser()
+      .parseFromString(html, "text/html")
+      .querySelectorAll('script[type="application/ld+json"]'),
+  ].flatMap((script) => {
+    const graph = JSON.parse(script.textContent ?? "{}")["@graph"] ?? [];
+    return graph.filter((node: { url?: string }) =>
+      node.url?.includes("/passes/")
+    );
+  });
+
 beforeAll(registerWorkspaceComponentTestEnv);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
 beforeEach(() => {
   passesRelease = "off";
+  autoRenewalEnabled = false;
   isCoworkPassesPageOpenAfterConnection.mockReset();
   isCoworkPassesPageOpenAfterConnection.mockResolvedValue(false);
   sharedPriceList = saleOnOpenSpace;
@@ -237,6 +255,7 @@ describe("PricingPage", () => {
   });
 
   test("keeps cowork pass offers out of the price page while the release is off", async () => {
+    autoRenewalEnabled = true;
     const html = await renderPage("en-US");
     expect(
       visibleDocument(html).getElementById("pricing-entry-packs")
@@ -244,6 +263,7 @@ describe("PricingPage", () => {
     expect(
       visibleLinks(html).some((href) => href?.includes("/passes/entry-pack"))
     ).toBe(false);
+    expect(passOffers(html)).toEqual([]);
     expect(
       visibleDocument(html).getElementById("pricing-unlimited")
     ).toBeNull();
@@ -285,18 +305,20 @@ describe("PricingPage", () => {
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
   });
 
-  test("shows the three Unlimited pass purchase options and their 30-day prices in the static price page", async () => {
+  test("shows the three Unlimited membership purchase options and their 30-day prices in the static price page", async () => {
     passesRelease = "on";
     const locale = "en-US";
     const section = visibleDocument(await renderPage(locale)).getElementById(
       "pricing-unlimited"
     );
-    if (!section) throw new Error("Expected the Unlimited pass price section");
+    if (!section)
+      throw new Error("Expected the Unlimited membership price section");
 
     expect(section.previousElementSibling?.id).toBe("pricing-entry-packs");
     expect(section.querySelector("h2")?.textContent).toBe(
       "Unlimited membership"
     );
+    expect(section.textContent).not.toContain("automatic renewal");
     const price = (amount: number) => formatMoney(currencyCZK(amount), locale);
     const rows = [...section.querySelectorAll("li")];
     expect(rows).toHaveLength(3);
@@ -309,6 +331,7 @@ describe("PricingPage", () => {
       expect(row.textContent).toContain(`${price(offer.price)} / 30 days`);
       expect(row.textContent).toContain(`About ${price(offer.perDay)} a day`);
       expect(row.textContent?.includes(price(69_000))).toBe(index === 0);
+      expect(row.textContent?.includes("Coffee included")).toBe(index > 0);
       const link = row.querySelector("a");
       expect(link?.getAttribute("href")).toBe(
         `/en-US/passes/unlimited?tier=${offer.tier}`
@@ -318,6 +341,45 @@ describe("PricingPage", () => {
       );
     }
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
+  });
+
+  test("discloses optional 30-day renewal and marks up the public base prices", async () => {
+    passesRelease = "on";
+    autoRenewalEnabled = true;
+    const html = await renderPage("en-US");
+
+    expect(visibleText(html)).toContain(
+      "If you're buying a membership for yourself, you can choose automatic renewal every 30 days."
+    );
+    expect(passOffers(html)).toEqual([
+      ...[
+        ["open-space", 5, 1150],
+        ["open-space", 10, 2190],
+        ["reserved-desk", 5, 1590],
+        ["reserved-desk", 10, 3090],
+        ["reserved-desk-workstation", 5, 2050],
+        ["reserved-desk-workstation", 10, 3990],
+      ].map(([tier, size, price]) =>
+        expect.objectContaining({
+          "@type": "Offer",
+          price,
+          priceCurrency: "CZK",
+          url: `https://workspace.deskohub.cz/passes/entry-pack?tier=${tier}&size=${size}`,
+        })
+      ),
+      ...[
+        ["open-space", 3490],
+        ["reserved-desk", 5990],
+        ["reserved-desk-workstation", 8490],
+      ].map(([tier, price]) =>
+        expect.objectContaining({
+          "@type": "Offer",
+          price,
+          priceCurrency: "CZK",
+          url: `https://workspace.deskohub.cz/passes/unlimited?tier=${tier}`,
+        })
+      ),
+    ]);
   });
 
   test("links to the Unlimited pass purchase in the visitor's locale", async () => {
@@ -341,6 +403,7 @@ describe("PricingPage", () => {
       expect(html.includes("/en-US/passes/unlimited?tier=open-space")).toBe(
         visitorOpen
       );
+      expect(passOffers(html).length > 0).toBe(visitorOpen);
       expect(isCoworkPassesPageOpenAfterConnection).toHaveBeenCalledTimes(1);
     }
   );

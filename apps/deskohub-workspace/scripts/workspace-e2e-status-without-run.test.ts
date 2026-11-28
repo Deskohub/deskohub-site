@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { Schema } from "effect";
 import { backendPreviewProofFixture } from "./shared/backend-preview-proof-fixture";
+import { runCommand } from "./shared/command";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
@@ -33,6 +34,24 @@ const publishStep = findStepByName(
   workflow,
   "Publish status without an E2E run"
 );
+
+test("recovery uses the workflow's server-only launcher with no ambient connection", async () => {
+  const command = findStepByName(workflow, "Run checkout E2E")
+    .run?.split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      line.endsWith("e2e/playwright-checkout/unlimited-pass-cleanup.ts")
+    );
+  if (!command) throw new Error("Unlimited recovery launcher is missing");
+  const result = await runCommand(["bash", "-c", command], {
+    cwd: resolve(import.meta.dir, "../../.."),
+    env: { PATH: process.env.PATH, NODE_ENV: "test" },
+    timeoutMs: 15_000,
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toBe("Unlimited pass cleanup could not start\n");
+}, 20_000);
 
 const prNumber = 7;
 const sha = (digit: string) => digit.repeat(40);
@@ -325,6 +344,216 @@ const deploymentSucceeded = {
 } as const;
 
 describe("Workspace E2E target resolution", () => {
+  const draft = { ...pullRequest, draft: true };
+  const manualDraft = {
+    ALLOW_DRAFT_PREVIEW: "true",
+    DEFAULT_BRANCH: "main",
+    EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/feature/x",
+    GITHUB_WORKFLOW_SHA: targetSha,
+    INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: "true",
+    INPUT_FLOWS: "payments",
+    INPUT_PAYMENT_PROVIDER: "nexi",
+  };
+
+  test("runs the exact internal draft Preview on an explicit manual opt-in", async () => {
+    const { calls, outputs, result } = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [draft],
+      manualDraft
+    );
+    expect(result.exitCode).toBe(0);
+    expect(outputs).toMatchObject({
+      draft_preview: "true",
+      eligible: "true",
+      flows: "payments",
+      pr_number: String(prNumber),
+      run_e2e: "true",
+      sha: targetSha,
+      url: previewUrl,
+    });
+    expect(calls).toContainEqual(expect.stringContaining(`sha=${targetSha}`));
+  });
+
+  test("admits Czech Workspace review only as evidence on an opted-in draft", async () => {
+    const czech = { ...manualDraft, INPUT_UNLIMITED_REVIEW_LOCALE: "cs-CZ" };
+    const accepted = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [draft],
+      czech
+    );
+    expect(accepted.result.exitCode).toBe(0);
+    expect(accepted.outputs).toMatchObject({
+      draft_preview: "true",
+      eligible: "true",
+      run_e2e: "true",
+    });
+    const ready = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [pullRequest],
+      czech
+    );
+    expect(ready.outputs.eligible).toBe("false");
+    expect(ready.outputs.run_e2e).toBeUndefined();
+    const withoutOptIn = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [draft],
+      {
+        ...czech,
+        ALLOW_DRAFT_PREVIEW: "false",
+      }
+    );
+    expect(withoutOptIn.result.exitCode).toBe(1);
+    expect(withoutOptIn.outputs.eligible).toBeUndefined();
+    expect(withoutOptIn.calls).toEqual([]);
+  });
+
+  test("admits only the original synthetic recovery on its exact internal draft", async () => {
+    const branch = "feat/unlimited-membership-checkout";
+    const owned = {
+      ...draft,
+      number: 1527,
+      head: { ...draft.head, ref: branch },
+    };
+    const recovery = {
+      ...manualDraft,
+      GITHUB_REF: `refs/heads/${branch}`,
+      TARGET_REF: branch,
+      INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: "false",
+      RECOVER_UNLIMITED_RUN: "45856799102",
+    };
+    const allowed = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [owned],
+      recovery
+    );
+    expect(allowed.result.exitCode).toBe(0);
+    expect(allowed.outputs).toMatchObject({
+      draft_preview: "true",
+      pr_number: "1527",
+      recover_unlimited_run: "45856799102",
+      run_e2e: "true",
+    });
+    for (const options of [
+      { RECOVER_UNLIMITED_RUN: "123" },
+      { ALLOW_DRAFT_PREVIEW: "false" },
+      { INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: "true" },
+      { GITHUB_REF: "refs/heads/main" },
+      { INPUT_PAYMENT_PROVIDER: "mock" },
+    ]) {
+      const result = await resolveTarget(
+        "success",
+        deploymentSucceeded,
+        [owned],
+        { ...recovery, ...options }
+      );
+      expect(result.result.exitCode).toBe(1);
+      expect(result.outputs.recover_unlimited_run).toBeUndefined();
+    }
+    const ready = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [{ ...owned, draft: false }],
+      recovery
+    );
+    expect(ready.outputs.eligible).toBe("false");
+    expect(ready.outputs.recover_unlimited_run).toBeUndefined();
+  });
+
+  test.each([
+    { EVENT_NAME: "workflow_dispatch" },
+    { ALLOW_DRAFT_PREVIEW: "false", EVENT_NAME: "workflow_dispatch" },
+    { ALLOW_DRAFT_PREVIEW: "true", EVENT_NAME: "repository_dispatch" },
+  ])(
+    "skips a draft without an explicit manual opt-in: %j",
+    async (overrides) => {
+      const { calls, outputs, result } = await resolveTarget(
+        "success",
+        deploymentSucceeded,
+        [draft],
+        overrides
+      );
+      expect(result.exitCode).toBe(0);
+      expect(outputs.eligible).toBe("false");
+      expect(calls.some((call) => call.includes("/deployments"))).toBe(false);
+    }
+  );
+
+  test.each([
+    { ...draft, head: { ...draft.head, repo: { full_name: "fork/repo" } } },
+    { ...draft, head: { ...draft.head, ref: "feature/y" } },
+    { ...draft, head: { ...draft.head, sha: sha("d") } },
+  ])("still requires a draft from the exact internal PR head", async (pr) => {
+    const { calls, outputs, result } = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [pr],
+      manualDraft
+    );
+    expect(result.exitCode).toBe(0);
+    expect(outputs.eligible).toBe("false");
+    expect(calls.some((call) => call.includes("/deployments"))).toBe(false);
+  });
+
+  test.each([
+    { TARGET_REF: "e2e/nightly" },
+    { GITHUB_REF: "refs/heads/feature/y" },
+    { GITHUB_WORKFLOW_SHA: sha("d") },
+  ])(
+    "rejects a draft opt-in on an unexpected workflow or target: %j",
+    async (overrides) => {
+      const { calls, outputs, result } = await resolveTarget(
+        "success",
+        deploymentSucceeded,
+        [draft],
+        { ...manualDraft, ...overrides }
+      );
+      expect(result.exitCode).toBe(1);
+      expect(outputs.eligible).toBeUndefined();
+      expect(calls).toEqual([]);
+    }
+  );
+
+  test("still requires the draft's exact immutable Preview record", async () => {
+    const { outputs, result } = await resolveTarget("success", null, [draft], {
+      ...manualDraft,
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_WORKFLOW_SHA: sha("d"),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(outputs.eligible).toBe("true");
+    expect(outputs.resolution_error_kind).toBe("preview-record-mismatch");
+  });
+
+  test("still resolves a non-draft workspace Preview by default", async () => {
+    const { outputs, result } = await resolveTarget(
+      "success",
+      deploymentSucceeded
+    );
+    expect(result.exitCode).toBe(0);
+    expect(outputs.eligible).toBe("true");
+    expect(outputs.draft_preview).not.toBe("true");
+    expect(outputs.run_e2e).toBe("true");
+  });
+
+  test("a ready PR still uses its standard status lane when draft Preview is allowed", async () => {
+    const { outputs, result } = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [pullRequest],
+      manualDraft
+    );
+    expect(result.exitCode).toBe(0);
+    expect(outputs.eligible).toBe("true");
+    expect(outputs.draft_preview).toBeUndefined();
+    expect(outputs.run_e2e).toBe("true");
+  });
+
   test("accepts a failed deployment only with a failed exact-SHA status", async () => {
     const accepted = await resolveTarget("failed", {
       description: "Deployment has failed",
@@ -550,10 +779,16 @@ describe("Workspace E2E nightly target resolution", () => {
     for (const name of [
       "Stop unless this SHA is still the PR head",
       "Release the lease unless this SHA is still the PR head",
+    ]) {
+      expect(findStepByName(workflow, name)?.if).toBe(nightlyOff);
+    }
+    for (const name of [
       "Publish allocation status",
       "Publish pending commit status",
     ]) {
-      expect(findStepByName(workflow, name)?.if).toBe(nightlyOff);
+      expect(findStepByName(workflow, name)?.if).toBe(
+        `${nightlyOff} && needs.resolve-target.outputs.draft_preview != 'true'`
+      );
     }
     expect(workflow.jobs["resolve-target"]?.outputs?.nightly).toContain(
       "steps.target.outputs.nightly"

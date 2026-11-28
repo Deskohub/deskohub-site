@@ -68,6 +68,21 @@ Nightly cases never run against a PR (D38). `resolve-target` passes `include_nig
   ```
 
 - **Review screenshots.** To capture the opt-in synthetic account and administration screenshots, set `review_screenshots=true`. Campaign composer captures use the separate `campaign_screenshots=true` input. Dispatch using a workflow ref that contains the input you need (for a PR preview, the PR branch), and keep `sha`, `url`, and `ref` bound to the exact PR head and its immutable deployment. Wait for the Vercel-triggered run for that PR SHA to finish first: both runs share a PR-and-SHA concurrency group with cancellation enabled. This runs the full suite, re-posts the `Workspace E2E` and `Workspace E2E allocation` statuses, and uploads screenshots in the dedicated `workspace-account-review-<run>-<attempt>` artifact; the separate general E2E artifact is uploaded on failure. If the screenshot run fails, rerun it and confirm the required status is green before merging.
+- **Draft PR Preview evidence.** Set `allow_draft_preview=true` on a manual dispatch for an exact open internal PR head. Use the default-branch workflow if it defines that input, or the reviewed workflow on the exact target branch and SHA. The normal Preview, allocation, migration, and provider checks apply. A run admitted while the PR was draft uses its own concurrency group and publishes no `Workspace E2E` or allocation commit status, even if the PR becomes ready during the run.
+
+- **Unlimited auto-renewal review.** Enable the branch's Unlimited preview and run `payments` in Nexi sandbox mode. On an opted-in draft, the combination of screenshot and Unlimited case opt-ins selects only Unlimited. Use `unlimited_review_locale=en-US` for the paid English journey. It also captures Czech Account controls for the same paid pass using the header language switch and restores English before continuing. Both widths are captured in the same case. The case checks the allocated period before creating a buyer because the paid pass has a manual Renew link only when it ends within the booking horizon. The workflow prefers `PR number % 3 + 1`; the allocator can grant another free shard when the preferred one is busy.
+
+  ```bash
+  gh workflow run workspace-e2e.yml --ref "$PR_BRANCH" \
+    -f sha="$PR_HEAD_SHA" -f url="$IMMUTABLE_PREVIEW_ORIGIN" -f ref="$PR_BRANCH" \
+    -f allow_draft_preview=true -f flows=payments -f payment_provider=nexi \
+    -f include_unlimited_pass_auto_renewal=true -f review_screenshots=true \
+    -f unlimited_review_locale=en-US
+  ```
+
+  After the paid journey's cleanup and shard release, repeat the dispatch with `unlimited_review_locale=cs-CZ` for Czech Workspace checkout and terms. This draft-only run selects only the Unlimited case, holds the period through the normal journal and stops before Pay. The Czech artifact provides no payment acceptance or Nexi screenshots. Keep the original locale of each issued checkout.
+
+  The draft-only `recover_unlimited_run=45856799102` input uses the same allocator and protected checkout environment for a single interrupted synthetic run. It verifies the original GitHub run, the durable buyer and reservation markers, and the exact sandbox payment outcome before invoking the app status route and owned cleanup. The recovery skips fixture admission and the browser suite. Verify all pass-day cancellations, profile expiry, account tombstone, and lease release before dispatching a review.
 - If Vercel finishes a preview before an open internal PR exists for its SHA, the `repository_dispatch` E2E run skips with `No eligible open internal PR matches the exact deployment SHA`. Once the PR exists, restart it with the manual dispatch from `main`, using the exact SHA, immutable preview URL, and branch:
 
   ```bash
@@ -127,6 +142,7 @@ The optional backend preview pilot uses `workspace-backend-preview-e2e` for prot
 - `WORKSPACE_E2E_FLOWS`: optional `all`, `none`, or comma-separated flow IDs from `e2e/flows.ts`. Defaults to `all` when unset. Manual `workflow_dispatch` also accepts a `flows` input.
 - `WORKSPACE_E2E_NIGHTLY_CASES=true`: also run the nightly cases (see [nightly run](#nightly-run)). The workflow sets it only for a validated nightly target dispatched with `include_nightly_cases`.
 - `WORKSPACE_E2E_REVIEW_SCREENSHOTS=true`: opt-in general account PR review screenshots, including the administration Overview and customer calendar captures (see [browser driving](browser-driving.md#review-screenshots)). A manual workflow dispatch sets it only when `review_screenshots=true`; PR preview events leave it unset.
+- `WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE`: the locale for the opted-in Unlimited checkout review. The manual workflow supplies it only with both `review_screenshots` and `include_unlimited_pass_auto_renewal` enabled. The input accepts `en-US` and `cs-CZ` and defaults to `en-US`. Checkout execution requires `en-US` until the Czech Nexi sandbox controls are verified.
 - `WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS=true`: opt-in campaign-composer screenshots only. A manual workflow dispatch enables this with `campaign_screenshots=true`; it does not enable general account captures.
 
 ## Preview database

@@ -162,7 +162,7 @@ export const revokeWorkspaceE2ESyntheticAccountRoles = (
  * session cookie value. Nothing changes in the deployment; the app
  * authenticates the cookie through its normal session lookup.
  */
-const issueWorkspaceE2ESyntheticSession = ({
+export const issueWorkspaceE2ESyntheticSession = ({
   accountId,
   secret,
 }: {

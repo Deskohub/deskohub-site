@@ -3,6 +3,7 @@ import type { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/fe
 export { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/features/passes/unlimited-pass";
 
 import { getLastConsumerWithdrawalDate } from "@/features/legal/early-performance";
+import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -44,9 +45,11 @@ export const getUnlimitedPassEndDate = (startDate: PlainDate): PlainDate =>
 
 export function unlimitedPassRequiresEarlyStart(
   startDate: PlainDate,
-  agreedOn: Temporal.PlainDate
+  agreedOn: Temporal.PlainDate,
+  purpose: ReservationBillingSelection["purpose"] = "personal"
 ) {
   return (
+    purpose === "personal" &&
     Temporal.PlainDate.compare(
       startDate,
       getLastConsumerWithdrawalDate(agreedOn)

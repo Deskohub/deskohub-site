@@ -62,6 +62,9 @@ Object.assign(Authentication, { Default: AuthenticationLayer });
 const connection = mock(() => Promise.resolve());
 const arePasskeysEnabled = mock(() => Promise.resolve(true));
 const isCoworkPassesPageOpenAfterConnection = mock(() => Promise.resolve(true));
+const loadAccountPassSection = mock(() =>
+  Promise.resolve({ unlimitedPasses: [] })
+);
 let referralsEnabled = true;
 const areReferralsEnabled = mock(() => Promise.resolve(referralsEnabled));
 const runWithRequestLocale = mock(
@@ -91,6 +94,9 @@ mock.module(
 mock.module("@/features/account/components/account-loading", () => ({
   AccountLoading,
 }));
+mock.module("@/features/account/account-pass-section.server", () => ({
+  loadAccountPassSection,
+}));
 mock.module("@/features/account/components/account-layout-shell", () => ({
   AccountLayoutShell,
 }));
@@ -111,6 +117,7 @@ describe("account route layout", () => {
     areReferralsEnabled.mockClear();
     arePasskeysEnabled.mockClear();
     isCoworkPassesPageOpenAfterConnection.mockClear();
+    loadAccountPassSection.mockClear();
     runWithRequestLocale.mockClear();
     referralsEnabled = true;
     currentUserEffect = Effect.succeed(null);
@@ -164,6 +171,7 @@ describe("account route layout", () => {
       expect(areReferralsEnabled).toHaveBeenCalledTimes(1);
       expect(arePasskeysEnabled).toHaveBeenCalledTimes(1);
       expect(isCoworkPassesPageOpenAfterConnection).toHaveBeenCalledTimes(1);
+      expect(loadAccountPassSection).not.toHaveBeenCalled();
       expect(rendered.map((element) => element.type)).toEqual([
         AccountLayoutShell,
         InstallLaunchRedirect,

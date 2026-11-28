@@ -54,6 +54,7 @@ import {
   readPassCheckoutHandoff,
   sealPassCheckoutHandoff,
 } from "./backend/pass-checkout-handoff";
+import { readUnlimitedAutoRenewalDisclosure } from "./backend/unlimited-auto-renewal";
 import {
   beginUnlimitedPassPurchase,
   getUnlimitedPassPaymentDisclosure,
@@ -71,6 +72,7 @@ import {
 } from "./pass-purchase-details";
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 import { getPassPurchaseStatusPath } from "./routes";
+import { unlimitedAutoRenewalAuthorizationSchema } from "./unlimited-auto-renewal";
 import {
   type UnlimitedPassSelection,
   unlimitedPassRequiresEarlyStart,
@@ -232,17 +234,21 @@ const purchaseFailure = <A, E, R>(
     Effect.catchIf(
       (error): error is E & EntryPackPurchaseError =>
         error instanceof EntryPackPurchaseError,
-      ({ reason, locale, earlyStartRequired }) =>
+      ({ reason, locale, earlyStartRequired, renewal }) =>
         Effect.succeed(
           reason === "terms-changed" && locale
             ? {
                 status: "terms_changed" as const,
                 disclosure:
                   product === "entry-pack"
-                    ? getEntryPackPaymentDisclosure(locale)
-                    : getUnlimitedPassPaymentDisclosure(
+                    ? getEntryPackPaymentDisclosure(
                         locale,
                         earlyStartRequired ?? false
+                      )
+                    : getUnlimitedPassPaymentDisclosure(
+                        locale,
+                        earlyStartRequired ?? false,
+                        renewal
                       ),
               }
             : { status: "purchase_error" as const, reason }
@@ -371,6 +377,9 @@ const makePayAction = (productKind: "entry-pack" | "unlimited") =>
         Schema.Struct({
           ...payEntryPackCheckoutSchema.fields,
           unlimitedEarlyStartAccepted: Schema.optionalKey(Schema.Boolean),
+          renewalAuthorization: Schema.optionalKey(
+            unlimitedAutoRenewalAuthorizationSchema
+          ),
         })
       ),
       deadline: checkoutSubmitDeadline,
@@ -421,6 +430,7 @@ const beginUnlimitedAction = defineWorkspaceAction(
           ]),
           selection: unlimitedPassSelectionSchema,
           renewsPassId: Schema.optionalKey(orderIdSchema),
+          autoRenew: Schema.optionalKey(Schema.Literal(true)),
           recipientName: Schema.optionalKey(
             unlimitedGiftRecipientNameSchema(locale)
           ),
@@ -454,7 +464,7 @@ const beginUnlimitedAction = defineWorkspaceAction(
           input.handoffToken,
           "unlimited"
         );
-        if (handoff && input.renewsPassId) {
+        if (handoff && (input.renewsPassId || input.autoRenew)) {
           return yield* new EntryPackPurchaseError({
             reason: "purchase-conflict",
           });
@@ -499,6 +509,7 @@ const beginUnlimitedAction = defineWorkspaceAction(
             return {
               status: "ready" as const,
               selection: input.selection,
+              ...(purchase.autoRenew && { autoRenew: true as const }),
               price: displayPassPurchasePrice(quote),
               validFrom: purchase.validFrom,
               lastUsableDate: getEntryPackLastUsableDate(
@@ -509,7 +520,8 @@ const beginUnlimitedAction = defineWorkspaceAction(
                 unlimitedPassRequiresEarlyStart(
                   purchase.validFrom,
                   getCurrentWorkspaceDate(yield* currentInstant)
-                )
+                ),
+                readUnlimitedAutoRenewalDisclosure(purchase)
               ),
             };
           }).pipe(

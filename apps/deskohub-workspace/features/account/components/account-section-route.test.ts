@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { ok } from "node:assert/strict";
 import { Schema } from "effect";
 import { isValidElement, type ReactElement, Suspense } from "react";
+import type { AccountPasses } from "@/features/account/account-passes.server";
+import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import { orderIdSchema } from "@/features/order";
 import {
   renderComponentElement,
   requireElement,
@@ -19,10 +22,17 @@ const getRequestPathname = mock(() =>
   Promise.resolve<string | undefined>("/en-US/account")
 );
 const loadCustomerAccountPage = mock(() =>
-  Promise.resolve({ kind: "unavailable" as const })
+  Promise.resolve<{
+    kind: "unavailable" | "unauthenticated" | "completion-required";
+  }>({
+    kind: "unavailable",
+  })
 );
 const loadCustomerAccountPasses = mock((_locale: string) =>
-  Promise.resolve({ kind: "empty" as const })
+  Promise.resolve<AccountPasses>({ held: [], boughtForOthers: [] })
+);
+const loadCustomerAccountUnlimitedPasses = mock((_locale: string) =>
+  Promise.resolve<AccountUnlimitedPasses>([])
 );
 const loadCustomerInvoiceHistory = mock((_locale: string) =>
   Promise.resolve({ kind: "empty" as const })
@@ -30,8 +40,19 @@ const loadCustomerInvoiceHistory = mock((_locale: string) =>
 const AccountPage = mock(() => null);
 const AccountContentLoading = mock(() => null);
 
-mock.module("next/navigation", () => ({ notFound }));
+mock.module("next/navigation", () => ({
+  notFound,
+  unstable_rethrow: () => undefined,
+}));
 mock.module("next/server", () => ({ connection }));
+mock.module("@/features/i18n/server/request-locale", () => ({
+  getRequestLocale: async () => "en-US",
+  runWithRequestLocale: async (work: (locale: "en-US") => unknown) =>
+    work("en-US"),
+}));
+mock.module("@/features/account/server/customer-session.server", () => ({
+  isCustomerSignedIn: async () => true,
+}));
 mock.module("@/features/account/server/account-release-gates.server", () => ({
   arePasskeysEnabled,
 }));
@@ -54,7 +75,7 @@ mock.module("@/features/account/account-passes.server", () => ({
   loadCustomerAccountPasses,
 }));
 mock.module("@/features/account/account-unlimited-passes.server", () => ({
-  loadCustomerAccountUnlimitedPasses: async () => [],
+  loadCustomerAccountUnlimitedPasses,
 }));
 mock.module("@/features/account/invoice-history.server", () => ({
   loadCustomerInvoiceHistory,
@@ -62,8 +83,24 @@ mock.module("@/features/account/invoice-history.server", () => ({
 mock.module("@/features/account/components/account-page", () => ({
   AccountPage,
 }));
+mock.module("@/features/account/components/account-layout-shell", () => ({
+  AccountLayoutShell: () => null,
+}));
+mock.module("@/features/account/components/account-unlimited-pass", () => ({
+  AccountUnlimitedRenewalUnavailable: () => null,
+}));
+mock.module("@/features/mobile-distribution/install-bar", () => ({
+  InstallBar: () => null,
+}));
+mock.module("@/features/mobile-distribution/install-launch-redirect", () => ({
+  InstallLaunchRedirect: () => null,
+}));
+mock.module("@/shared/components/page-navigation-boundary", () => ({
+  PageNavigationBoundary: () => null,
+}));
 mock.module("@/features/account/components/account-loading", () => ({
   AccountContentLoading,
+  AccountLoading: () => null,
 }));
 const i18n = await import("@/features/i18n");
 mock.module("@/features/i18n", () => ({
@@ -78,6 +115,10 @@ mock.module("@/features/i18n", () => ({
 
 const { AccountSectionPathCheck, AccountSections, getAccountSectionMetadata } =
   await import("./account-section-route");
+const { default: AccountLayout } = await import(
+  "@/app/[locale]/(site)/(full-header)/account/layout"
+);
+const { AccountSignInRedirect } = await import("./account-sign-in-redirect");
 
 const isProps = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
@@ -149,7 +190,13 @@ describe("customer account route boundary", () => {
       events.push("load");
       return { kind: "unavailable" as const };
     });
-    loadCustomerAccountPasses.mockClear();
+    loadCustomerAccountPasses.mockReset();
+    loadCustomerAccountPasses.mockImplementation(async () => ({
+      held: [],
+      boughtForOthers: [],
+    }));
+    loadCustomerAccountUnlimitedPasses.mockReset();
+    loadCustomerAccountUnlimitedPasses.mockImplementation(async () => []);
     AccountPage.mockClear();
   });
 
@@ -189,6 +236,9 @@ describe("customer account route boundary", () => {
   });
 
   test("lets the released Passes section load in its locale after rendering", async () => {
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "completion-required",
+    }));
     getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
     const output = await renderSections().content();
 
@@ -234,7 +284,6 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled],
     ["security", arePasskeysEnabled],
-    ["passes", isCoworkPassesPageOpenAfterConnection],
   ] as const)(
     "returns not found for the withheld %s section without loading the account",
     async (section, flag) => {
@@ -249,6 +298,74 @@ describe("customer account route boundary", () => {
       expect(loadCustomerAccountPage).not.toHaveBeenCalled();
     }
   );
+
+  test("keeps Passes and renewal cancellation available to a subscriber with purchases closed", async () => {
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => false);
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "completion-required",
+    }));
+    loadCustomerAccountUnlimitedPasses.mockImplementation(async () => [
+      {
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        tier: "Open Space",
+        boughtForYou: false,
+        period: "Nov 1 to Nov 30, 2026",
+        seating: { kind: "shared" },
+        status: "upcoming",
+        startsOn: "Nov 1, 2026",
+        autoRenewal: {
+          status: "pending",
+          amount: "CZK 3,490",
+          nextRenewalOn: "Dec 1, 2026",
+        },
+      },
+    ]);
+
+    const output = await renderSections().content();
+    expect(output).toMatchObject({
+      type: AccountPage,
+      props: {
+        passPurchasesEnabled: false,
+        loadPasses: expect.any(Function),
+        unlimitedPasses: [
+          expect.objectContaining({
+            autoRenewal: expect.objectContaining({ status: "pending" }),
+          }),
+        ],
+      },
+    });
+    expect(await renderPathCheck("passes").content()).toBeNull();
+
+    const layout = await AccountLayout({ children: null, modal: null });
+    const shell = await renderSuspended(layout).content();
+    expect(shell).toHaveProperty("props.children.0.props.passesEnabled", true);
+  });
+
+  test("retains the Passes destination when a signed-out subscriber follows a link", async () => {
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => false);
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "unauthenticated",
+    }));
+    expect(await renderPathCheck("passes").content()).toBeNull();
+    expect(await renderSections().content()).toMatchObject({
+      type: AccountSignInRedirect,
+      props: { returnTo: "/en-US/account/passes" },
+    });
+  });
+
+  test("withholds Passes while purchases are closed for an account with no passes", async () => {
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => false);
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "completion-required",
+    }));
+    await expect(renderSections().content()).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(renderPathCheck("passes").content()).rejects.toThrow(
+      "NEXT_NOT_FOUND"
+    );
+  });
 
   test("leaves a released section's path to the sections' account page", async () => {
     const { content, fallback } = renderPathCheck("security");
@@ -275,7 +392,6 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled, "referrals"],
     ["security", arePasskeysEnabled, "passkeys"],
-    ["passes", isCoworkPassesPageOpenAfterConnection, "passes"],
   ] as const)(
     "returns not found for the withheld %s section",
     async (section, flag, event) => {

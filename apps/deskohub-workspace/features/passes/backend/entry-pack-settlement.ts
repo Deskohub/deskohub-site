@@ -16,6 +16,7 @@ import { getCoworkReservationInterval } from "@/features/reservation/cowork-rese
 import { currentInstant } from "@/shared/utils/temporal";
 import { isEntryPackQuoteExpired } from "../pass-offer";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
+import { recordPrepaidRenewalCoverage } from "./unlimited-auto-renewal-ledger";
 import { keepsUnlimitedRenewalSource } from "./unlimited-pass-window";
 
 type UnlimitedServiceDate = Pick<
@@ -264,7 +265,10 @@ export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
             )
           )
           .returning();
-        if (purchase) yield* queueInitialEntryPackGift(purchase, activatedAt);
+        if (purchase) {
+          yield* recordPrepaidRenewalCoverage(purchase);
+          yield* queueInitialEntryPackGift(purchase, activatedAt);
+        }
         return purchase;
       }
 

@@ -10,7 +10,10 @@ import {
   WORKSPACE_E2E_FLOW_IDS,
   WORKSPACE_E2E_FLOW_SHORT_CODES,
 } from "../../../.github/actions/workspace-e2e-flows/flows.mjs";
-import type { WorkspaceE2ECaseId } from "./playwright-checkout/case-catalog";
+import {
+  unlimitedPassAutoRenewalCaseId,
+  type WorkspaceE2ECaseId,
+} from "./playwright-checkout/case-catalog";
 
 export const workspaceE2EFlowIds = [
   "checkout-cowork",
@@ -88,6 +91,7 @@ export const workspaceE2ECaseFlowById = {
   "contact-form": "public-site",
   "checkout-calendar-sale": "discounts",
   "checkout-referral-someone-else": "referrals",
+  [unlimitedPassAutoRenewalCaseId]: "payments",
   "payment-late-recovery-recreated": "payments",
   "checkout-meeting-room-paid-one-hour": "checkout-meeting-room",
   "checkout-meeting-room-paid-whole-day": "checkout-meeting-room",
@@ -211,8 +215,16 @@ export const isWorkspaceE2EFlowSelected = (
 
 export const isWorkspaceE2ECaseSelected = (
   caseId: WorkspaceE2ECaseId,
-  selection: WorkspaceE2EFlowSelection
+  selection: WorkspaceE2EFlowSelection,
+  options: {
+    readonly includeUnlimitedPassAutoRenewal?: boolean;
+    readonly unlimitedPassReviewOnly?: boolean;
+  } = {}
 ): boolean =>
+  (!options.unlimitedPassReviewOnly ||
+    caseId === unlimitedPassAutoRenewalCaseId) &&
+  (caseId !== unlimitedPassAutoRenewalCaseId ||
+    options.includeUnlimitedPassAutoRenewal === true) &&
   isWorkspaceE2EFlowSelected(workspaceE2ECaseFlowById[caseId], selection);
 
 export const needsWorkspaceE2ECheckoutPreparation = (

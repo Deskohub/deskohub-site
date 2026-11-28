@@ -85,7 +85,7 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Prístup a používanie služieb",
     body: [
-      "7.1 Potvrdzujúci e-mail obsahuje bezpečný odkaz na prístupovú stránku Rezervácie. Hneď ako je Rezervácia zaplatená, potvrdená a overená v reálnom čase a má vystavený prístupový PIN kód, zobrazuje chránená stránka tento PIN spolu s presne naprogramovanými hranicami platnosti kódu. O tom, kedy zamykací systém kód prijíma, rozhodujú výlučne naprogramované hranice AlgoPINu; aplikácie nezdieľajú vlastné hodiny. PIN nie je uvedený priamo v potvrdzujúcom e-maile. Pri Tímovom stole sa zobrazené časové údaje riadia článkom 7.5.",
+      "7.1 Potvrdzujúci e-mail obsahuje bezpečný odkaz na prístupovú stránku Rezervácie. Keď Poskytovateľ vydá PIN k potvrdenej Rezervácii, stránka zobrazí aktuálny kód a čas jeho platnosti. Pri Tímovom stole sa zobrazené časové údaje riadia článkom 7.5.",
       "7.2 Poskytovateľ môže prístupový PIN zmeniť; Klient použije kód aktuálne zobrazený na prístupovej stránke Rezervácie. Zobrazenie PIN kódu nepredlžuje potvrdenú dobu užívania Priestorov a nezakladá právo na prístup mimo tejto doby alebo do iných priestorov. Používanie Priestorov je možné iba v potvrdenom čase Rezervácie.",
       "7.3 Klient smie PIN kód oznámiť iba osobám oprávneným zúčastniť sa na jeho Rezervácii, musí ho chrániť pred ďalšími osobami a zodpovedá za to, ako ho použijú jeho hostia. Podozrenie zo zneužitia bezodkladne oznámi Poskytovateľovi.",
       "7.4 Klient a jeho hostia sú povinní dodržiavať kapacitu, účel Rezervácie, potvrdený čas a Prevádzkový poriadok. Klient zabezpečí, aby hostia opustili Priestory najneskôr na konci Rezervácie.",
@@ -129,10 +129,11 @@ const termsAndConditionsSections: LegalSection[] = [
         </a>
         . Lehota je zachovaná, ak je oznámenie odoslané pred jej uplynutím.
         Odstúpenie možno odoslať aj online funkciou „Odstúpiť od zmluvy“ pri
-        Rezervácii v zákazníckom účte na webe alebo v aplikácii a potvrdiť
-        tlačidlom „Potvrdiť odstúpenie od zmluvy“. Prijatie odstúpenia
-        Poskytovateľ bez zbytočného odkladu potvrdí e-mailom na adresu účtu
-        vrátane obsahu vyhlásenia a dátumu a času jeho odoslania.
+        Rezervácii v zákazníckom účte na webe alebo v aplikácii alebo na stránke
+        so stavom objednávky balíka alebo členstva a potvrdiť tlačidlom
+        „Potvrdiť odstúpenie od zmluvy“. Prijatie odstúpenia Poskytovateľ bez
+        zbytočného odkladu potvrdí e-mailom na adresu účtu vrátane obsahu
+        vyhlásenia a dátumu a času jeho odoslania.
       </>,
       "9.4 Po platnom odstúpení vráti Poskytovateľ prijaté peňažné prostriedky bez zbytočného odkladu, najneskôr do 14 dní, rovnakým spôsobom, akým boli prijaté, ak sa strany nedohodnú inak bez vzniku ďalších nákladov Spotrebiteľa.",
       "9.5 Vzor oznámenia: „Oznamujem, že odstupujem od zmluvy na túto Službu: [opis a číslo Rezervácie], objednanú dňa [dátum]. Meno a priezvisko Spotrebiteľa: [doplniť]. Adresa Spotrebiteľa: [doplniť]. Dátum: [doplniť]. Podpis iba pri listinnom podaní.“ Použitie vzoru nie je povinné.",

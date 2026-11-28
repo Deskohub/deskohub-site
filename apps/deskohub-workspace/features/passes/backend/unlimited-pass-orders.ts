@@ -341,6 +341,7 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
     readonly complimentary?: true;
     readonly selection: UnlimitedPassSelection;
     readonly renewsPassId?: OrderId;
+    readonly autoRenew?: true;
     readonly quote: PassPurchaseQuote;
     readonly days: readonly PassDayPlan[];
   }) {
@@ -411,6 +412,7 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
         buyerAccountId: buyer.accountId,
         holderAccountId: holder.accountId,
         renewsPassId: input.renewsPassId,
+        autoRenew: input.autoRenew,
         product: "unlimited",
         tier: selection.tier,
         unlimitedCoffee:

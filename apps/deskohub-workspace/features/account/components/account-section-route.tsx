@@ -2,20 +2,25 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { loadCustomerAccountPasses } from "@/features/account/account-passes.server";
-import { loadCustomerAccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import { loadAccountPassSection } from "@/features/account/account-pass-section.server";
 import { AccountContentLoading } from "@/features/account/components/account-loading";
 import { AccountPage } from "@/features/account/components/account-page";
+import { AccountSignInRedirect } from "@/features/account/components/account-sign-in-redirect";
+import { AccountUnlimitedRenewalUnavailable } from "@/features/account/components/account-unlimited-pass";
 import { loadCustomerInvoiceHistory } from "@/features/account/invoice-history.server";
 import { loadCustomerAccountPage } from "@/features/account/page-data.server";
 import { getAccountPageTitle } from "@/features/account/page-title";
-import { findAccountSectionOfPathname } from "@/features/account/routes";
+import {
+  findAccountSectionOfPathname,
+  getAccountSectionPath,
+} from "@/features/account/routes";
 import {
   isAccountPageSection,
   isAccountSectionReleased,
 } from "@/features/account/sections";
 import { arePasskeysEnabled } from "@/features/account/server/account-release-gates.server";
 import { type Locale, m } from "@/features/i18n";
+import { getRequestLocale } from "@/features/i18n/server/request-locale";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { areReferralsEnabled } from "@/features/referrals/referral-release-gate.server";
 import { getRequestPathname } from "@/shared/backend/utils/request-pathname";
@@ -57,23 +62,36 @@ export function AccountSections({ locale }: { readonly locale: Locale }) {
 async function AccountSectionsContent({ locale }: { readonly locale: Locale }) {
   await connection();
   const pathname = await getRequestPathname();
-  const { passesEnabled } = await ensureAccountPageSectionShown(
+  const section =
     pathname === undefined
       ? undefined
-      : findAccountSectionOfPathname(locale, pathname)
-  );
-  const [state, unlimitedPasses] = await Promise.all([
+      : findAccountSectionOfPathname(locale, pathname);
+  const purchasesEnabled = await checkAccountSectionRelease(section);
+  const [state, { loadPasses, unlimitedPasses }] = await Promise.all([
     loadCustomerAccountPage(),
-    passesEnabled ? loadCustomerAccountUnlimitedPasses(locale) : [],
+    loadAccountPassSection(locale, purchasesEnabled),
   ]);
+  if (section === "passes") {
+    if (state.kind === "unauthenticated") {
+      return (
+        <AccountSignInRedirect
+          locale={locale}
+          returnTo={getAccountSectionPath(locale, "passes")}
+        />
+      );
+    }
+    if (state.kind === "unavailable") {
+      return <AccountUnlimitedRenewalUnavailable locale={locale} />;
+    }
+    if (!loadPasses) notFound();
+  }
 
   return (
     <AccountPage
       loadInvoiceHistory={() => loadCustomerInvoiceHistory(locale)}
-      loadPasses={
-        passesEnabled ? () => loadCustomerAccountPasses(locale) : undefined
-      }
+      loadPasses={loadPasses}
       locale={locale}
+      passPurchasesEnabled={purchasesEnabled}
       state={state}
       unlimitedPasses={unlimitedPasses}
     />
@@ -104,13 +122,23 @@ async function AccountSectionPathCheckContent({
   readonly section: Promise<string>;
 }) {
   await connection();
-  await ensureAccountPageSectionShown(await section);
+  const name = await section;
+  const purchasesEnabled = await checkAccountSectionRelease(name);
+  if (name === "passes" && !purchasesEnabled) {
+    const state = await loadCustomerAccountPage();
+    if (state.kind !== "unauthenticated" && state.kind !== "unavailable") {
+      const { loadPasses } = await loadAccountPassSection(
+        await getRequestLocale(),
+        false
+      );
+      if (!loadPasses) notFound();
+    }
+  }
 
   return null;
 }
 
-/** Not found unless the section is an account page section that is released. */
-async function ensureAccountPageSectionShown(section: string | undefined) {
+async function checkAccountSectionRelease(section: string | undefined) {
   if (section === undefined || !isAccountPageSection(section)) notFound();
   const [passkeysEnabled, referralsEnabled, passesEnabled] = await Promise.all([
     arePasskeysEnabled(),
@@ -118,13 +146,13 @@ async function ensureAccountPageSectionShown(section: string | undefined) {
     isCoworkPassesPageOpenAfterConnection(),
   ]);
   if (
+    section !== "passes" &&
     !isAccountSectionReleased(section, {
       passkeysEnabled,
-      passesEnabled,
       referralsEnabled,
     })
   ) {
     notFound();
   }
-  return { passesEnabled };
+  return passesEnabled;
 }

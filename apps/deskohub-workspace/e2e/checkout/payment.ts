@@ -6,6 +6,7 @@ import {
 } from "@/features/reservation/persistence-contracts";
 import {
   activateHydratedElement,
+  type CurrentBrowserDocument,
   openPage,
   readActivePage,
   readPageUrl,
@@ -41,6 +42,7 @@ import {
   readMockHostedPaymentUrl,
 } from "./mock-payment-url";
 import type { NexiHostedNavigation } from "./nexi-hosted-page-ownership";
+import { nexiReviewReadyUrl } from "./nexi-review-navigation";
 import {
   prepareReservationForm,
   type ReservationFormPreparation,
@@ -554,6 +556,7 @@ const formatReservationStartDiagnostics = (
 export type HostedPaymentPage = {
   readonly checkoutPage: Page;
   readonly checkoutPageUrl: string;
+  readonly isHandoffDocument?: CurrentBrowserDocument;
   readonly nexiNavigation?: NexiHostedNavigation;
   readonly page: Page;
   readonly provider: E2EPaymentProvider;
@@ -562,11 +565,15 @@ export type HostedPaymentPage = {
 
 /** Waits for the selected hosted page, leaving its tab active. */
 export const submitPaymentAndWaitForHostedPage = ({
+  observeHandoffDocument = false,
   config,
+  submitPayment = submitCheckoutPayment,
   paymentProvider = initialE2EPaymentProvider(config.paymentProvider),
   session,
 }: {
   config: WorkspaceE2EConfig;
+  observeHandoffDocument?: boolean;
+  submitPayment?: typeof submitCheckoutPayment;
   paymentProvider?: E2EPaymentProvider;
   session: E2EBrowserSession;
 }): Effect.Effect<HostedPaymentPage, WorkspaceE2EError> =>
@@ -582,14 +589,22 @@ export const submitPaymentAndWaitForHostedPage = ({
     addRedaction(
       parseUrl(checkoutPageUrl)?.searchParams.get("payState") ?? undefined
     );
-    const checkoutPage = yield* submitCheckoutPayment(session, timeouts);
+    const checkoutPage = yield* submitPayment(session, timeouts);
 
+    let isHandoffDocument: HostedPaymentPage["isHandoffDocument"];
     const hostedPaymentUrl = yield* waitForPageUrl({
       description: `${paymentProvider} hosted payment page`,
       matches: (url) =>
         paymentProvider === "mock"
           ? readMockHostedPaymentUrl(url, [config.baseUrl]) !== undefined
           : url.includes("nexigroup.com") || url.includes("/hpp/nexi/"),
+      ...(observeHandoffDocument && {
+        onDocumentMatch: (isCurrent) => {
+          isHandoffDocument = isCurrent;
+        },
+      }),
+      ...(observeHandoffDocument &&
+        paymentProvider === "nexi" && { documentReadyUrl: nexiReviewReadyUrl }),
       session,
       timeoutMs: timeouts.providerTransition,
     });
@@ -613,6 +628,7 @@ export const submitPaymentAndWaitForHostedPage = ({
     return {
       checkoutPage,
       checkoutPageUrl,
+      ...(isHandoffDocument && { isHandoffDocument }),
       page: hostedPage,
       provider: paymentProvider,
       url: hostedPaymentUrl,

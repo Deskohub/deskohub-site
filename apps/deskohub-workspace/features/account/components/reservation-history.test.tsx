@@ -214,7 +214,11 @@ describe("ReservationHistory", () => {
     });
     expect(cardDoorCodeLink.getAttribute("href")).toBe(pass.accessPath);
     expect(cardDoorCodeLink.hasAttribute("data-client-navigation")).toBe(false);
-    expect(view.queryByRole("link", { name: "Extend membership" })).toBeNull();
+    expect(
+      view.queryByRole("link", {
+        name: m.unlimitedPassRenew({}, { locale: "en-US" }),
+      })
+    ).toBeNull();
 
     const renewalPath = `/en-US/passes/unlimited?renew=${pass.orderId}`;
     const statusPath = `/en-US/reservation/status/${pass.orderId}`;
@@ -228,7 +232,11 @@ describe("ReservationHistory", () => {
       </UnsavedChangesProvider>
     );
     expect(
-      view.getByRole("link", { name: "Extend membership" }).getAttribute("href")
+      view
+        .getByRole("link", {
+          name: m.unlimitedPassRenew({}, { locale: "en-US" }),
+        })
+        .getAttribute("href")
     ).toBe(renewalPath);
     const statusLink = view.getByRole("link", { name: "View order status" });
     expect(statusLink.getAttribute("href")).toBe(statusPath);

@@ -1,4 +1,5 @@
-import type { Locator, Page } from "@playwright/test";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Frame, Locator, Page, Request } from "@playwright/test";
 import { Effect } from "effect";
 import type {
   BrowserPageFunction,
@@ -24,31 +25,26 @@ export const normalizeBrowserText = (text: string) =>
   text.replaceAll(/\s+/g, " ").trim();
 
 /**
- * Polls `readUrl` until `matches` accepts the URL. A wait that fails or runs
+ * Polls until the reader finds a matching URL. A wait that fails or runs
  * out fails as a plain error, not a timeout, carrying the page diagnostics.
  */
 const pollForUrl = (
-  readUrl: Effect.Effect<string | undefined, WorkspaceE2EError>,
+  readMatch: Effect.Effect<string | undefined, WorkspaceE2EError>,
   {
     description,
-    matches,
     readDiagnostics,
     timeoutMs,
   }: {
     readonly description: string;
-    readonly matches: (url: string) => boolean;
     readonly readDiagnostics: Effect.Effect<string, WorkspaceE2EError>;
     readonly timeoutMs: number;
   }
 ): Effect.Effect<string, WorkspaceE2EError> =>
-  pollUntil(
-    readUrl.pipe(Effect.map((url) => (url && matches(url) ? url : undefined))),
-    {
-      intervalMs: workspaceE2EPollIntervalMs.browser,
-      label: description,
-      timeoutMs,
-    }
-  ).pipe(
+  pollUntil(readMatch, {
+    intervalMs: workspaceE2EPollIntervalMs.browser,
+    label: description,
+    timeoutMs,
+  }).pipe(
     Effect.tap(() => Effect.sync(() => log(`Reached ${description}`))),
     Effect.catch((error) =>
       readDiagnostics.pipe(
@@ -394,28 +390,159 @@ export const readPageUrl = (
       Effect.orElseSucceed(() => undefined)
     );
 
+export type CurrentBrowserDocument = (
+  page: Page,
+  timeoutMs: number
+) => Promise<boolean>;
+
+// Playwright emits framenavigated for History API updates as well as document
+// replacement. Retain the original Document in its browser execution context.
+const matchCurrentDocument = (page: Page, rawUrl: string, readyUrl: string) => {
+  const mainFrame = page.mainFrame();
+  let currentUrl = rawUrl;
+  let invalidated = false;
+  const invalidate = () => {
+    invalidated = true;
+    page.off("framenavigated", recordNavigation);
+    page.off("request", recordRequest);
+    page.off("close", invalidate);
+  };
+  const recordNavigation = (frame: Frame) => {
+    if (frame !== mainFrame) return;
+    const nextUrl = frame.url();
+    if (
+      nextUrl !== currentUrl &&
+      !(currentUrl === rawUrl && nextUrl === readyUrl)
+    ) {
+      invalidate();
+      return;
+    }
+    currentUrl = nextUrl;
+  };
+  const recordRequest = (request: Request) => {
+    if (!request.isNavigationRequest()) return;
+    try {
+      if (request.frame() === mainFrame) invalidate();
+    } catch {
+      // A request can precede its frame. The Document check still applies.
+    }
+  };
+  const matches = () =>
+    !invalidated && !page.isClosed() && page.url() === currentUrl;
+  const ready = () => matches() && currentUrl === readyUrl;
+  page.on("framenavigated", recordNavigation);
+  page.on("request", recordRequest);
+  page.once("close", invalidate);
+  const original = page
+    .evaluateHandle(() => ({ source: document, url: location.href }))
+    .then(async (handle) => {
+      let accepted = false;
+      try {
+        accepted =
+          matches() &&
+          (await handle.evaluate(
+            (observed, expected) =>
+              observed.source === document && observed.url === expected,
+            rawUrl
+          )) &&
+          matches();
+        return accepted ? handle : undefined;
+      } finally {
+        if (!accepted) {
+          invalidate();
+          await handle.dispose().catch(() => undefined);
+        }
+      }
+    })
+    .catch(() => {
+      invalidate();
+      return undefined;
+    });
+  const verify: CurrentBrowserDocument = async (candidate, timeoutMs) => {
+    if (candidate !== page || !matches()) return false;
+    const timer = new AbortController();
+    try {
+      return await Promise.race([
+        original
+          .then(async (handle) => {
+            if (!handle || !matches()) return false;
+            if (currentUrl !== readyUrl) {
+              await page.waitForURL((url) => url.href !== rawUrl, {
+                waitUntil: "commit",
+                timeout: timeoutMs,
+              });
+            }
+            return (
+              ready() &&
+              (await handle.evaluate(
+                (observed) => observed.source === document
+              )) &&
+              ready()
+            );
+          })
+          .catch(() => false),
+        delay(timeoutMs, false, { signal: timer.signal }),
+      ]);
+    } finally {
+      timer.abort();
+    }
+  };
+  return { verify, cancel: invalidate };
+};
+
 /**
  * Polls the active page's URL until `matches` accepts it. A wait that runs
  * out fails as a plain error, not a timeout, carrying the page diagnostics.
+ * Opt-in capture callers can bind that exact document at the matching read.
  */
 export const waitForPageUrl = ({
   description,
+  documentReadyUrl,
   matches,
+  onDocumentMatch,
   session,
   timeoutMs,
 }: {
   readonly description: string;
+  readonly documentReadyUrl?: (matchedUrl: string) => string;
   readonly matches: (url: string) => boolean;
+  readonly onDocumentMatch?: (isCurrent: CurrentBrowserDocument) => void;
   readonly session: PolledBrowserSession;
   readonly timeoutMs: number;
 }): Effect.Effect<string, WorkspaceE2EError> =>
   pollForUrl(
-    readPolledSession(session, readPageUrl).pipe(
-      Effect.orElseSucceed(() => undefined)
-    ),
+    readPolledSession(session, (activeSession) =>
+      onDocumentMatch
+        ? activeSession.use("read browser URL", async (page) => {
+            const rawUrl = page.url();
+            const readyUrl = documentReadyUrl?.(rawUrl) ?? rawUrl;
+            const url = redact(rawUrl).trim();
+            // Start the first browser snapshot before evaluating a known
+            // bootstrap match. Its expected history event may arrive first.
+            const pending =
+              readyUrl !== rawUrl
+                ? matchCurrentDocument(page, rawUrl, readyUrl)
+                : undefined;
+            try {
+              if (!url || !matches(url)) {
+                pending?.cancel();
+                return undefined;
+              }
+              onDocumentMatch(
+                (pending ?? matchCurrentDocument(page, rawUrl, readyUrl)).verify
+              );
+              return url;
+            } catch (error) {
+              pending?.cancel();
+              throw error;
+            }
+          })
+        : readPageUrl(activeSession).pipe(
+            Effect.map((url) => (url && matches(url) ? url : undefined))
+          )
+    ).pipe(Effect.orElseSucceed(() => undefined)),
     {
       description,
-      matches,
       readDiagnostics: readPolledSession(
         session,
         readBrowserPageDiagnostics

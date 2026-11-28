@@ -748,7 +748,7 @@ const matchesReservationBooking = (
   expectedNoteLine.trim().length > 0 &&
   reservation.note?.split("\n").includes(expectedNoteLine) === true;
 
-/** A conditional status change may act only on its booking and marker. */
+/** A conditional status change checks its booking, marker, and any required source status. */
 export const verifyReservationStatusTransition = (
   reservation: DotyposReservation,
   booking: DotyposReservationBooking,
@@ -762,15 +762,15 @@ export const verifyReservationStatusTransition = (
     "status" | "expectedNoteLine" | "expectedCurrentStatus" | "reservationId"
   >
 ): Effect.Effect<Option.Option<DotyposReservation>, DotyposVersionConflict> => {
-  if (
+  const alreadyCancelled =
     reservation.id === reservationId &&
     reservation.status === "CANCELLED" &&
-    status === "CANCELLED"
-  ) {
+    status === "CANCELLED";
+  if (alreadyCancelled && expectedCurrentStatus === undefined) {
     return Effect.succeedSome(reservation);
   }
   if (
-    reservation.status === "CANCELLED" ||
+    (!alreadyCancelled && reservation.status === "CANCELLED") ||
     (expectedCurrentStatus !== undefined &&
       reservation.status !== status &&
       reservation.status !== expectedCurrentStatus) ||
@@ -1734,6 +1734,7 @@ const makeDotyposService: Effect.Effect<
       | "confirmReservation"
       | "restoreCancelledReservation";
     readonly status: "CANCELLED" | "CONFIRMED";
+    readonly requireStrongEtag?: boolean;
     readonly settle: (
       reservation: DotyposReservation,
       replayed: Option.Option<DotyposUncertain>
@@ -1767,6 +1768,14 @@ const makeDotyposService: Effect.Effect<
           Option.map(earlier, ({ uncertain }) => uncertain)
         );
         if (Option.isSome(settled)) return settled.value;
+        if (input.requireStrongEtag && !isStrongEtag(current.etag)) {
+          return yield* stayUncertain(
+            dotyposInvalidResponse(
+              { operation: input.operation, request: "reservation.version" },
+              { message: "The reservation write requires a strong ETag." }
+            )
+          );
+        }
         if (
           Option.isSome(earlier) &&
           earlier.value.replayedEtag === current.etag
@@ -1947,6 +1956,7 @@ const makeDotyposService: Effect.Effect<
         reservationId: id,
         operation,
         status: input.status,
+        requireStrongEtag: input.expectedCurrentStatus !== undefined,
         settle: (record, replayed) =>
           verifyReservationStatusTransition(record, booking, {
             ...input,

@@ -5,6 +5,7 @@ import {
   isWorkspaceE2ENightlyCaseId,
   isWorkspaceE2EOfficeCaseId,
   isWorkspaceE2ETableCaseId,
+  unlimitedPassAutoRenewalCaseId,
   type WorkspaceE2ECaseId,
 } from "./case-catalog";
 import { readWorkspaceE2ERunPlan } from "./run-plan";
@@ -61,13 +62,21 @@ export const registerWorkspaceE2ECases = (
     test(
       caseId,
       async ({ browser, environment, runEffect, runPlan, testScope }) => {
-        const { nightlyCasesEnabled, workspaceE2EFlowSelection } = await import(
-          "../e2e-env"
-        );
+        const {
+          nightlyCasesEnabled,
+          unlimitedPassAutoRenewalCaseEnabled,
+          unlimitedPassReviewOnly,
+          workspaceE2EFlowSelection,
+        } = await import("../e2e-env");
         test.skip(
           !isWorkspaceE2ECaseSelected(
             caseId,
-            workspaceE2EFlowSelection(environment)
+            workspaceE2EFlowSelection(environment),
+            {
+              includeUnlimitedPassAutoRenewal:
+                unlimitedPassAutoRenewalCaseEnabled(environment),
+              unlimitedPassReviewOnly: unlimitedPassReviewOnly(environment),
+            }
           ),
           "Excluded by WORKSPACE_E2E_FLOWS"
         );
@@ -87,6 +96,18 @@ export const registerWorkspaceE2ECases = (
 
         const planned = await runEffect(
           Effect.gen(function* () {
+            if (caseId === unlimitedPassAutoRenewalCaseId) {
+              const { makeUnlimitedPassAutoRenewalCase } =
+                yield* Effect.promise(
+                  () => import("../cases/unlimited-pass-auto-renewal")
+                );
+              const { allocation, runId } = runPlan.runContext;
+              return makeUnlimitedPassAutoRenewalCase({
+                allocation,
+                environment,
+                runId,
+              });
+            }
             const { preparation } = runPlan;
             const cases = preparation
               ? yield* makeWorkspaceE2ECases({

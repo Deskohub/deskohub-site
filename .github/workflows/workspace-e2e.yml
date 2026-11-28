@@ -5,6 +5,11 @@ on:
     types: [vercel.deployment.failed, vercel.deployment.skipped, vercel.deployment.success]
   workflow_dispatch:
     inputs:
+      allow_draft_preview:
+        description: Allow an internal draft PR Preview for manual evidence without publishing commit statuses
+        required: false
+        default: false
+        type: boolean
       cleanup_stale_e2e_reservations:
         description: Cancel strictly identified stale E2E reservations before validation
         required: false
@@ -25,6 +30,11 @@ on:
         required: false
         default: false
         type: boolean
+      include_unlimited_pass_auto_renewal:
+        description: Also test Unlimited auto-renewal on a preview with its draft gate enabled (requires flows=payments and payment_provider=nexi)
+        required: false
+        default: false
+        type: boolean
       payment_provider:
         description: Payment provider mode expected on the preview
         type: choice
@@ -39,6 +49,18 @@ on:
         required: false
         default: false
         type: boolean
+      unlimited_review_locale:
+        description: Unlimited review evidence (English with Nexi, Czech Workspace checkout only on a draft PR)
+        type: choice
+        default: en-US
+        options:
+          - en-US
+          - cs-CZ
+      recover_unlimited_run:
+        description: Existing cancelled synthetic Unlimited run to reconcile (45856799102 only)
+        type: string
+        required: false
+        default: ""
       sha:
         description: Exact commit SHA to test
         required: true
@@ -73,6 +95,7 @@ jobs:
     outputs:
       backend_preview: ${{ steps.target.outputs.backend_preview }}
       deployment: ${{ steps.target.outputs.deployment }}
+      draft_preview: ${{ steps.target.outputs.draft_preview }}
       eligible: ${{ steps.target.outputs.eligible }}
       flows: ${{ steps.target.outputs.flows }}
       head_ref: ${{ steps.target.outputs.head_ref }}
@@ -80,6 +103,7 @@ jobs:
       nightly: ${{ steps.target.outputs.nightly }}
       nightly_cases: ${{ steps.target.outputs.nightly_cases }}
       pr_number: ${{ steps.target.outputs.pr_number }}
+      recover_unlimited_run: ${{ steps.target.outputs.recover_unlimited_run }}
       run_e2e: ${{ steps.target.outputs.run_e2e }}
       sha: ${{ steps.target.outputs.sha }}
       status_description: ${{ steps.status-without-run.outputs.description }}
@@ -102,11 +126,17 @@ jobs:
       - name: Resolve eligible PR and immutable preview
         id: target
         env:
+          ALLOW_DRAFT_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_draft_preview || 'false' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
           FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
           INCLUDE_NIGHTLY_CASES: ${{ github.event_name == 'workflow_dispatch' && inputs.include_nightly_cases && 'true' || 'false' }}
+          INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || 'false' }}
           INPUT_FLOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.flows || '' }}
+          INPUT_PAYMENT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_provider || '' }}
+          RECOVER_UNLIMITED_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_unlimited_run || '' }}
+          INPUT_UNLIMITED_REVIEW_LOCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && inputs.include_unlimited_pass_auto_renewal && inputs.unlimited_review_locale || '' }}
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
           NIGHTLY_BRANCH: e2e/nightly
@@ -133,12 +163,52 @@ jobs:
             echo "Target ref is not a valid branch name" >&2
             exit 1
           fi
+          allow_draft_preview=false
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "${ALLOW_DRAFT_PREVIEW:-false}" == "true" ]]; then
+            if [[ "$TARGET_REF" == "$NIGHTLY_BRANCH" ]]; then
+              echo 'Draft Preview evidence requires an internal PR target' >&2
+              exit 1
+            fi
+            # If the dispatch uses a branch workflow, bind its definition
+            # and local actions to the same reviewed commit as the Preview.
+            if [[ "${GITHUB_REF:-}" != "refs/heads/${DEFAULT_BRANCH:-}" &&
+              ("${GITHUB_REF:-}" != "refs/heads/$TARGET_REF" || "${GITHUB_WORKFLOW_SHA:-}" != "$TARGET_SHA") ]]; then
+              echo 'Draft Preview evidence requires the default-branch workflow or the exact target branch workflow' >&2
+              exit 1
+            fi
+            allow_draft_preview=true
+          fi
+          require_draft_preview=false
+          if [[ -n "${INPUT_UNLIMITED_REVIEW_LOCALE:-}" || -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
+            if [[ "$allow_draft_preview" != "true" ]]; then
+              echo 'Unlimited review or recovery requires allow_draft_preview' >&2
+              exit 1
+            fi
+            require_draft_preview=true
+          fi
+          if [[ -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
+            if [[ "$RECOVER_UNLIMITED_RUN" != "45856799102" ||
+                "$TARGET_REF" != "feat/unlimited-membership-checkout" ||
+                "${GITHUB_REF:-}" != "refs/heads/$TARGET_REF" ||
+                "${GITHUB_WORKFLOW_SHA:-}" != "$TARGET_SHA" ||
+                "$INPUT_FLOWS" != "payments" || "$INPUT_PAYMENT_PROVIDER" != "nexi" ||
+                "${INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL:-false}" == "true" ||
+                "$INCLUDE_NIGHTLY_CASES" == "true" ]]; then
+              echo 'Recovery is limited to the original cancelled Unlimited run on its exact draft branch' >&2
+              exit 1
+            fi
+          fi
           # Nightly cases test main only (D38). A dispatch that asks for them
           # against any other target fails before it resolves a PR, so it
           # leaves that PR's required status alone.
           if [[ "$INCLUDE_NIGHTLY_CASES" == "true" &&
             ! ("$EVENT_NAME" == "workflow_dispatch" && "$TARGET_REF" == "$NIGHTLY_BRANCH") ]]; then
             echo "Nightly cases run only against the $NIGHTLY_BRANCH target, never a PR; dispatch without include_nightly_cases" >&2
+            exit 1
+          fi
+          if [[ "${INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL:-false}" == "true" &&
+            ("$TARGET_REF" == "$NIGHTLY_BRANCH" || "$INPUT_FLOWS" != "payments" || "$INPUT_PAYMENT_PROVIDER" != "nexi") ]]; then
+            echo 'Unlimited auto-renewal requires a PR preview, flows=payments, and payment_provider=nexi' >&2
             exit 1
           fi
 
@@ -148,12 +218,14 @@ jobs:
           pulls="$(jq -c '.items' <<<"$pulls_result")"
           filter_eligible_pulls() {
             jq \
+              --argjson allow_draft "$allow_draft_preview" \
+              --argjson require_draft "$require_draft_preview" \
               --arg repo "$GITHUB_REPOSITORY" \
               --arg ref "$TARGET_REF" \
               --arg sha "$TARGET_SHA" \
               '[.[] | select(
                 .state == "open" and
-                .draft == false and
+                ((($require_draft | not) and .draft == false) or ($allow_draft and .draft == true)) and
                 .head.repo.full_name == $repo and
                 .head.ref == $ref and
                 .head.sha == $sha and
@@ -163,6 +235,11 @@ jobs:
           }
           eligible_pulls="$(filter_eligible_pulls <<<"$pulls")"
           eligible_count="$(jq 'length' <<<"$eligible_pulls")"
+          # A run admitted while draft stays evidence-only if the PR is
+          # marked ready before it finishes.
+          if jq -e 'any(.[]; .draft == true)' <<<"$eligible_pulls" >/dev/null; then
+            echo 'draft_preview=true' >> "$GITHUB_OUTPUT"
+          fi
           fail() {
             echo "$1" >&2
             echo "resolution_error=$2" >> "$GITHUB_OUTPUT"
@@ -234,9 +311,12 @@ jobs:
                   -f head="$owner:$TARGET_REF")"
                 fallback_ok="$(jq -r '.ok' <<<"$fallback_result")"
                 fallback_pulls="$(jq -c '.items' <<<"$fallback_result")"
-                fallback_eligible_count="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
-                if [[ "$fallback_eligible_count" != "0" ]]; then
+                fallback_eligible_pulls="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null || echo '[]')"
+                if jq -e 'length > 0' <<<"$fallback_eligible_pulls" >/dev/null; then
                   verified_head=true
+                  if jq -e 'any(.[]; .draft == true)' <<<"$fallback_eligible_pulls" >/dev/null; then
+                    echo 'draft_preview=true' >> "$GITHUB_OUTPUT"
+                  fi
                 elif [[ "$fallback_ok" == "true" ]]; then
                   echo "No eligible open internal PR matches the exact deployment SHA"
                   echo "eligible=false" >> "$GITHUB_OUTPUT"
@@ -277,6 +357,13 @@ jobs:
                 ambiguous-pr
             fi
             pr_number="$(jq -r '.[0].number' <<<"$eligible_pulls")"
+            if [[ -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
+              if [[ "$pr_number" != "1527" ]]; then
+                echo 'The original Unlimited recovery is limited to PR 1527' >&2
+                exit 1
+              fi
+              echo "recover_unlimited_run=$RECOVER_UNLIMITED_RUN" >> "$GITHUB_OUTPUT"
+            fi
             pr_body="$(jq -r '.[0].body // ""' <<<"$eligible_pulls")"
             {
               echo "head_ref=$TARGET_REF"
@@ -417,6 +504,7 @@ jobs:
         id: status-without-run
         if: >-
           !cancelled() && steps.target.outputs.eligible == 'true' &&
+          steps.target.outputs.draft_preview != 'true' &&
           steps.target.outputs.nightly != 'true' &&
           (steps.target.outcome != 'success' ||
            steps.target.outputs.deployment != 'success' ||
@@ -687,7 +775,7 @@ jobs:
     # migration until the release step. A newer head's run waits for the
     # older run to release it, or for its attempt to complete.
     concurrency:
-      group: workspace-e2e-pr-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      group: workspace-e2e-pr-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}${{ needs.resolve-target.outputs.draft_preview == 'true' && '-draft-preview' || '' }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 50
@@ -835,7 +923,7 @@ jobs:
           exit 1
 
       - name: Publish allocation status
-        if: needs.resolve-target.outputs.nightly != 'true'
+        if: needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
         env:
           ALLOCATION_SHARD: ${{ steps.lease.outputs.shard }}
           GH_TOKEN: ${{ github.token }}
@@ -853,7 +941,7 @@ jobs:
             >/dev/null
 
       - name: Publish pending commit status
-        if: needs.resolve-target.outputs.nightly != 'true'
+        if: needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
         env:
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_CLI: .workspace-e2e-coordinator/.github/actions/workspace-e2e-flows/cli.mjs
@@ -1003,6 +1091,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Migrate preview database
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         working-directory: apps/deskohub-workspace
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
@@ -1010,7 +1099,7 @@ jobs:
         run: bun run db:migrate
 
       - name: Reconcile stale Workspace E2E reservations
-        if: github.event_name == 'workflow_dispatch' && inputs.cleanup_stale_e2e_reservations
+        if: github.event_name == 'workflow_dispatch' && inputs.cleanup_stale_e2e_reservations && needs.resolve-target.outputs.recover_unlimited_run == ''
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
@@ -1025,6 +1114,7 @@ jobs:
         run: bun --cwd apps/deskohub-workspace e2e:cleanup-stale --apply
 
       - name: Validate aggregate Dotypos capacity
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.pooled_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
@@ -1039,6 +1129,7 @@ jobs:
         run: bun --cwd apps/deskohub-workspace e2e:capacity
 
       - name: Verify hosted browser runtime
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         run: |
           set -euo pipefail
           browser_path="$(command -v google-chrome || command -v chromium || true)"
@@ -1068,8 +1159,10 @@ jobs:
           WORKSPACE_E2E_FLOWS: ${{ needs.resolve-target.outputs.flows }}
           # Set only for a validated nightly target that asked for them.
           WORKSPACE_E2E_NIGHTLY_CASES: ${{ needs.resolve-target.outputs.nightly == 'true' && needs.resolve-target.outputs.nightly_cases == 'true' && 'true' || '' }}
+          WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || '' }}
           # Set only for a manual dispatch that asked for review screenshots.
           WORKSPACE_E2E_REVIEW_SCREENSHOTS: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && 'true' || '' }}
+          WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && inputs.include_unlimited_pass_auto_renewal && inputs.unlimited_review_locale || '' }}
           DATABASE_URL: ${{ steps.preview-database.outputs.pooled_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
           WORKSPACE_E2E_DATABASE_ALLOWLIST: ${{ steps.preview-database.outputs.direct_url }}
@@ -1087,6 +1180,8 @@ jobs:
           WORKSPACE_E2E_POSTHOG_HOST: ${{ vars.WORKSPACE_E2E_POSTHOG_HOST }}
           WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN: ${{ vars.WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN }}
           WORKSPACE_E2E_ALLOCATION_SHARD: ${{ steps.lease.outputs.shard }}
+          WORKSPACE_E2E_RECOVER_UNLIMITED_RUN: ${{ needs.resolve-target.outputs.recover_unlimited_run }}
+          WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN: ${{ needs.resolve-target.outputs.recover_unlimited_run != '' && github.token || '' }}
           WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: ${{ github.event_name == 'workflow_dispatch' && inputs.campaign_screenshots && 'true' || '' }}
           NIGHTLY_TARGET: ${{ needs.resolve-target.outputs.nightly }}
           PREVIEW_BRANCH: ${{ needs.resolve-target.outputs.head_ref }}
@@ -1114,7 +1209,12 @@ jobs:
               exit 1
             fi
           fi
-          bun turbo test:e2e --filter=deskohub-workspace
+          if [[ -n "${WORKSPACE_E2E_RECOVER_UNLIMITED_RUN:-}" ]]; then
+            bun turbo i18n:compile --filter=deskohub-workspace
+            bun --cwd apps/deskohub-workspace --no-orphans --no-env-file --conditions=react-server e2e/playwright-checkout/unlimited-pass-cleanup.ts
+          else
+            bun turbo test:e2e --filter=deskohub-workspace
+          fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
@@ -1124,10 +1224,14 @@ jobs:
           # The trace reporter replaces each with sanitized-trace.zip; a raw
           # trace a killed run left behind, and the worker's trace working
           # files that an early stop can leave, never leave the runner.
+          # The Unlimited case's ownership journals and interrupted atomic
+          # writes stay on the runner for teardown.
           path: |
             apps/deskohub-workspace/e2e-artifacts/**
             !apps/deskohub-workspace/e2e-artifacts/**/trace*.zip
             !apps/deskohub-workspace/e2e-artifacts/**/.playwright-artifacts-*/**
+            !apps/deskohub-workspace/e2e-artifacts/checkout/account-journals/unlimited-pass-auto-renewal.json*
+            !apps/deskohub-workspace/e2e-artifacts/checkout/cleanup-journals/unlimited-pass-auto-renewal.json*
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1159,7 +1263,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Classify synthetic main account state
-        if: failure()
+        if: failure() && needs.resolve-target.outputs.recover_unlimited_run == ''
         continue-on-error: true
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
@@ -1247,7 +1351,8 @@ jobs:
     needs: [resolve-target, resolve-backend-preview, test-e2e]
     if: >-
       github.repository_id == '1015951989' && github.ref == 'refs/heads/main' && github.ref_protected &&
-      needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-backend-preview.result == 'success' &&
+      needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-target.outputs.draft_preview != 'true' &&
+      needs.resolve-backend-preview.result == 'success' &&
       needs.test-e2e.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -1274,7 +1379,7 @@ jobs:
 
   publish-final-status:
     needs: [resolve-target, fill-bun-package-cache, test-e2e, confirm-backend-preview]
-    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
+    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
       cancel-in-progress: false
@@ -1325,6 +1430,7 @@ jobs:
     needs: resolve-target
     if: >-
       !cancelled() && needs.resolve-target.outputs.eligible == 'true' &&
+      needs.resolve-target.outputs.draft_preview != 'true' &&
       needs.resolve-target.outputs.nightly != 'true' &&
       (needs.resolve-target.result != 'success' ||
        needs.resolve-target.outputs.deployment != 'success' ||

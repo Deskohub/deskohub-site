@@ -25,11 +25,13 @@ export function UnlimitedPassDetails({
   selection,
   order,
   renewsPassId,
+  autoRenew,
   ...props
 }: PassPurchaseDetailsProps & {
   readonly selection: UnlimitedPassSelection;
   readonly order?: UnlimitedPassOrderLink;
   readonly renewsPassId?: OrderId;
+  readonly autoRenew?: boolean;
 }) {
   const { locale } = props;
   const passPrice = getUnlimitedPassPrice({
@@ -50,10 +52,16 @@ export function UnlimitedPassDetails({
     <PassPurchaseDetails
       {...props}
       product={{ kind: "unlimited" }}
-      allowGift={!renewsPassId}
+      allowGift={!renewsPassId && !autoRenew}
       signInPath={getAccountSignInPath(
         locale,
-        getUnlimitedPassDetailsPath(locale, selection, order, renewsPassId)
+        getUnlimitedPassDetailsPath(
+          locale,
+          selection,
+          order,
+          renewsPassId,
+          autoRenew
+        )
       )}
       summary={
         <>
@@ -113,6 +121,12 @@ export function UnlimitedPassDetails({
                 selection.monitorOption,
                 locale
               )}
+            />
+          )}
+          {autoRenew && (
+            <PassPurchaseSummaryItem
+              label={m.unlimitedPassCheckoutPurchaseMode({}, { locale })}
+              value={m.unlimitedPassCheckoutAutoRenew({}, { locale })}
             />
           )}
         </>

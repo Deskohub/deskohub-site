@@ -9,6 +9,7 @@ import { getConfig, getDatasourceConfig } from "../config";
 import { toWorkspaceE2EError } from "../errors";
 import {
   isWorkspaceE2EReferralCaseId,
+  unlimitedPassAutoRenewalCaseId,
   type WorkspaceE2ECaseId,
   workspaceE2ECaseIds,
 } from "../playwright-checkout/case-catalog";
@@ -46,6 +47,7 @@ const signedOutCaseIds = [
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 const ownIdentityCaseIds = [
+  unlimitedPassAutoRenewalCaseId,
   "checkout-agent-booking",
   "checkout-referral-someone-else",
   "checkout-signed-out-verification",

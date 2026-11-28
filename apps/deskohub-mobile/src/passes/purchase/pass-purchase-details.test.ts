@@ -125,53 +125,60 @@ mock.module("../../routing/open-site-page", () => ({
 }));
 const { PassPurchaseAgreement } = await import("./pass-purchase-agreement");
 
-test("uses one agreement for both policy documents and the actual early-start request", () => {
-  const earlyStartRequest = "The service starts on the selected date.";
-  const toggle = mock(() => undefined);
-  const tree = hostTree(
-    elementTree(PassPurchaseAgreement, {
-      disclosure: {
-        documents: [
-          {
-            key: "terms-and-conditions",
-            hash: "terms",
-            hashAlgorithm: "sha256",
-            path: "/en-US/terms-and-conditions",
-          },
-          {
-            key: "operating-rules",
-            hash: "rules",
-            hashAlgorithm: "sha256",
-            path: "/en-US/operating-rules",
-          },
-        ],
-        earlyStartRequest,
-      },
-      checked: false,
-      disabled: false,
-      onToggle: toggle,
-      locale: "en-US",
-    })
-  );
+test.each([true, false])(
+  "uses one agreement with both documents and shows applicable early start (%s)",
+  (showEarlyStart) => {
+    openDocument.mockClear();
+    const earlyStartRequest = "The service starts on the selected date.";
+    const toggle = mock(() => undefined);
+    const tree = hostTree(
+      elementTree(PassPurchaseAgreement, {
+        showEarlyStart,
+        disclosure: {
+          documents: [
+            {
+              key: "terms-and-conditions",
+              hash: "terms",
+              hashAlgorithm: "sha256",
+              path: "/en-US/terms-and-conditions",
+            },
+            {
+              key: "operating-rules",
+              hash: "rules",
+              hashAlgorithm: "sha256",
+              path: "/en-US/operating-rules",
+            },
+          ],
+          earlyStartRequest,
+        },
+        checked: false,
+        disabled: false,
+        onToggle: toggle,
+        locale: "en-US",
+      })
+    );
 
-  const checkboxes = findAll(tree, "Pressable").filter(
-    ({ props }) => props.role === "checkbox"
-  );
-  expect(checkboxes).toHaveLength(1);
-  expect(checkboxes[0]?.props).toMatchObject({
-    "aria-checked": false,
-    "aria-label": expect.stringContaining(earlyStartRequest),
-  });
-  const links = findAll(tree, "Text").filter(
-    ({ props }) => props.role === "link"
-  );
-  expect(links).toHaveLength(2);
-  const pressLink = links[0]?.props.onPress;
-  if (typeof pressLink !== "function") throw new Error("Missing legal link");
-  const stopPropagation = mock(() => undefined);
+    const checkboxes = findAll(tree, "Pressable").filter(
+      ({ props }) => props.role === "checkbox"
+    );
+    expect(checkboxes).toHaveLength(1);
+    expect(checkboxes[0]?.props).toMatchObject({
+      "aria-checked": false,
+      "aria-label": showEarlyStart
+        ? expect.stringContaining(earlyStartRequest)
+        : expect.not.stringContaining(earlyStartRequest),
+    });
+    const links = findAll(tree, "Text").filter(
+      ({ props }) => props.role === "link"
+    );
+    expect(links).toHaveLength(2);
+    const pressLink = links[0]?.props.onPress;
+    if (typeof pressLink !== "function") throw new Error("Missing legal link");
+    const stopPropagation = mock(() => undefined);
 
-  pressLink({ stopPropagation });
-  expect(stopPropagation).toHaveBeenCalledTimes(1);
-  expect(openDocument).toHaveBeenCalledTimes(1);
-  expect(toggle).toHaveBeenCalledTimes(0);
-});
+    pressLink({ stopPropagation });
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
+    expect(openDocument).toHaveBeenCalledTimes(1);
+    expect(toggle).toHaveBeenCalledTimes(0);
+  }
+);

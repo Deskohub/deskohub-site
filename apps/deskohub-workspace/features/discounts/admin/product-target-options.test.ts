@@ -51,7 +51,7 @@ describe("discount product target labels", () => {
       { kind: "unlimited" },
     ]);
     expect(formatDiscountProductTargets(targets, "cs-CZ")).toBe(
-      "Balíček vstupů · Rezervovaný stůl · 10 vstupů, Neomezené členství"
+      "Balíček vstupů · Vyhrazené místo · 10 vstupů, Neomezené členství"
     );
   });
 

@@ -16,6 +16,7 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { maskEmailAddress } from "@/shared/utils";
+import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { AccountPassesPanel } from "./account-passes";
 
 beforeAll(registerWorkspaceComponentTestEnv);
@@ -292,6 +293,9 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
     "Your Unlimited memberships couldn’t be loaded right now."
   );
   expect(markup).not.toContain(m.accountPassesEmpty({}, { locale: "en-US" }));
+  expect(markup).toContain(
+    `href="mailto:${workspaceSiteConstants.contact.infoEmail}"`
+  );
 });
 
 test("shows generic gift attribution when there is no buyer name", async () => {
@@ -324,4 +328,38 @@ test("shows generic gift attribution when there is no buyer name", async () => {
   expect(markup).not.toContain("Bought for you by");
   expect(markup).not.toContain("Book a date");
   expect(markup).not.toContain("View order status");
+});
+
+test("shows the cancellation email when a membership's renewal status cannot load", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          purchasesEnabled={false}
+          unlimitedPasses={[
+            {
+              orderId,
+              tier: "Open Space",
+              boughtForYou: false,
+              period: "Nov 1 to Nov 30, 2026",
+              seating: { kind: "shared" },
+              status: "upcoming",
+              startsOn: "Nov 1, 2026",
+              renewalPath: "/en-US/passes/unlimited",
+              autoRenewal: { status: "unavailable" },
+            },
+          ]}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+  expect(markup).toContain('role="alert"');
+  expect(markup).toContain(
+    `href="mailto:${workspaceSiteConstants.contact.infoEmail}"`
+  );
+  expect(markup).not.toContain('href="/en-US/passes/unlimited"');
+  expect(markup).not.toContain('href="/en-US/passes/entry-pack"');
 });

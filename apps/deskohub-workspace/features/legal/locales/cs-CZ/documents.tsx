@@ -4,11 +4,16 @@ import type {
   LegalSection,
 } from "../../legal-document-body";
 import { companyAddress, companyName, contactEmail } from "../operator-details";
+import { unlimitedAutoRenewalSection } from "./unlimited-auto-renewal-section";
+
+const revisedDocumentDate = "1. prosince 2026";
 
 const commercialRegisterDisclosure =
   "Údaje o zápisu v obchodním rejstříku jsou k dispozici v odkazovaném oficiálním výpisu společnosti.";
 
-const termsAndConditionsSections: LegalSection[] = [
+const termsAndConditionsSections = (
+  includesUnlimitedAutoRenewal: boolean
+): LegalSection[] => [
   {
     heading: "1. Úvodní ustanovení",
     body: [
@@ -21,7 +26,9 @@ const termsAndConditionsSections: LegalSection[] = [
         Městským soudem v Praze (dále jen „Poskytovatel“), a klientem (dále jen
         „Klient“).
       </>,
-      "1.2 Tyto VOP se vztahují na coworkingové vstupy, online rezervace zasedací místnosti, soukromé kanceláře a Týmového stolu a na krátkodobé užívání prostor pro akce sjednané individuálně.",
+      includesUnlimitedAutoRenewal
+        ? "1.2 Tyto VOP se vztahují na coworkingové vstupy, balíčky vstupů, neomezené členství, online rezervace zasedací místnosti, soukromé kanceláře a Týmového stolu a na krátkodobé užívání prostor pro individuálně sjednané akce."
+        : "1.2 Tyto VOP se vztahují na coworkingové vstupy, online rezervace zasedací místnosti, soukromé kanceláře a Týmového stolu a na krátkodobé užívání prostor pro akce sjednané individuálně.",
       "1.3 Ustanovení těchto VOP jsou nedílnou součástí každé smlouvy uzavřené mezi Poskytovatelem a Klientem.",
       "1.4 Právní vztahy neupravené těmito VOP se řídí právním řádem České republiky, zejména zákonem č. 89/2012 Sb., občanský zákoník.",
       "1.5 Je-li Klient spotřebitelem, nejsou těmito VOP omezena práva, kterých se podle kogentních právních předpisů nemůže vzdát.",
@@ -30,13 +37,23 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "2. Vymezení pojmů",
     body: [
-      "2.1 Klientem se rozumí fyzická nebo právnická osoba, která využívá služby Poskytovatele.",
-      "2.2 Spotřebitelem se rozumí Klient, který jedná mimo rámec své podnikatelské činnosti.",
+      includesUnlimitedAutoRenewal
+        ? "2.1 Klientem se rozumí fyzická nebo právnická osoba, která si objednává nebo využívá Služby Poskytovatele."
+        : "2.1 Klientem se rozumí fyzická nebo právnická osoba, která využívá služby Poskytovatele.",
+      "2.2 Spotřebitelem se rozumí fyzická osoba, která mimo rámec své podnikatelské činnosti nebo mimo rámec samostatného výkonu svého povolání uzavírá smlouvu s Poskytovatelem nebo s ním jinak jedná.",
       "2.3 Prostory jsou coworkingové prostory, zasedací místnost, soukromá kancelář a eventové prostory provozované Poskytovatelem. Mezi coworkingové prostory patří také Open Space s Týmovými stoly.",
       "2.4 Službami se rozumí časově omezené umožnění užívání zvolených Prostor a související služby uvedené v objednávce.",
       "2.5 Tarifem se rozumí konkrétní rozsah coworkingových služeb a podmínek jejich čerpání dle aktuálního Ceníku Poskytovatele.",
       "2.6 Přístupovým PIN kódem se rozumí aktuální kód umožňující vstup do prostor Poskytovatele.",
-      "2.7 Rezervací se rozumí objednávka konkrétního coworkingového vstupu, termínu zasedací místnosti, termínu, počtu dnů a počtu míst v soukromé kanceláři nebo termínu a velikosti Týmového stolu.",
+      includesUnlimitedAutoRenewal
+        ? "2.7 Rezervací se rozumí objednávka konkrétního coworkingového vstupu, termínu zasedací místnosti, termínu, počtu dnů a počtu míst v soukromé kanceláři nebo termínu a velikosti Týmového stolu. Coworkingový vstup lze rezervovat samostatně nebo využít vstup z balíčku."
+        : "2.7 Rezervací se rozumí objednávka konkrétního coworkingového vstupu, termínu zasedací místnosti, termínu, počtu dnů a počtu míst v soukromé kanceláři nebo termínu a velikosti Týmového stolu.",
+      ...(includesUnlimitedAutoRenewal
+        ? [
+            "2.8 Balíčkem se rozumí balíček vstupů nebo neomezené členství. Balíček vstupů opravňuje určeného držitele k využití stanoveného počtu coworkingových vstupů. Neomezené členství opravňuje určeného držitele k přístupu v každém zaplaceném období 30 kalendářních dnů v časech a rozsahu podle zvolené varianty.",
+            "2.9 Balíčky vstupů a neomezené členství bez automatického obnovování mají omezenou dobu platnosti. Neomezené členství s automatickým obnovováním trvá na dobu neurčitou podle článku 16. Balíček slouží k osobnímu užívání určeným držitelem. Rezervace může v potvrzené kapacitě zahrnovat oprávněné hosty.",
+          ]
+        : []),
     ],
   },
   {
@@ -47,7 +64,9 @@ const termsAndConditionsSections: LegalSection[] = [
       "3.3 Rezervace soukromé kanceláře opravňuje Klienta k výhradnímu užívání kanceláře v potvrzeném počtu míst po celé zvolené kalendářní dny. Každý den trvá od půlnoci do následující půlnoci v časovém pásmu Europe/Prague a poslední den uvedený v potvrzení je do Rezervace zahrnut.",
       "3.4 Konkrétní kapacita, vybavení, cena, termín a rozsah Rezervace jsou uvedeny na rezervační stránce a v souhrnu objednávky. Klient nesmí překročit potvrzenou kapacitu a odpovídá za své hosty a další osoby, kterým umožní vstup. Kapacita Rezervace Týmového stolu odpovídá počtu míst u stolu zvolené velikosti.",
       "3.5 Poskytovatel dále umožňuje Klientovi krátkodobé užívání prostor pro účely pořádání akcí, a to vždy na základě individuální dohody.",
-      "3.6 Služby představují krátkodobé oprávnění užívat určené Prostory a související služby; nezakládají nájemní právo, sídlo, provozovnu ani jiné věcné právo k Prostorám. Klient nesmí bez samostatné písemné dohody používat adresu Prostor jako sídlo, místo podnikání, provozovnu nebo doručovací adresu.",
+      includesUnlimitedAutoRenewal
+        ? "3.6 Služby opravňují Klienta k užívání určených Prostor a souvisejících služeb ve sjednaném rozsahu. Nezakládají nájemní právo, sídlo, provozovnu ani jiné věcné právo k Prostorám. Klient nesmí bez samostatné písemné dohody používat adresu Prostor jako sídlo, místo podnikání, provozovnu nebo doručovací adresu."
+        : "3.6 Služby představují krátkodobé oprávnění užívat určené Prostory a související služby; nezakládají nájemní právo, sídlo, provozovnu ani jiné věcné právo k Prostorám. Klient nesmí bez samostatné písemné dohody používat adresu Prostor jako sídlo, místo podnikání, provozovnu nebo doručovací adresu.",
       "3.7 Rezervace Týmového stolu opravňuje Klienta k výhradnímu užívání konkrétního přiděleného stolu ve sdíleném prostoru Open Space po potvrzenou dobu. Začátek i konec Rezervace připadá na hranici čtvrthodiny. Rezervace trvá nejméně 15 minut a nejvýše 24 hodin a musí se celá vejít do doby, kdy lze Open Space využívat.",
     ],
   },
@@ -84,9 +103,15 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Přístup a užívání služeb",
     body: [
-      "7.1 Potvrzovací email obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile je Rezervace zaplacená, potvrzená a živě ověřená a má vystaven přístupový PIN kód, zobrazuje chráněná stránka tento PIN společně s přesně naprogramovanými hranicemi platnosti kódu. Přijímání kódu zamykacím systémem určuje výhradně naprogramované hranice AlgoPINu; aplikace nesdílejí vlastní hodiny. PIN není obsažen přímo v potvrzovacím emailu. U Týmového stolu se zobrazené časové údaje řídí článkem 7.5.",
-      "7.2 Poskytovatel může přístupový PIN změnit; Klient použije kód aktuálně zobrazený na přístupové stránce Rezervace. Zobrazení PIN kódu neprodlužuje potvrzenou dobu užívání Prostor a nezakládá právo na přístup mimo tuto dobu nebo do jiných prostor. Používání Prostor je možné pouze v potvrzené době Rezervace.",
-      "7.3 Klient smí PIN kód sdělit pouze osobám oprávněným účastnit se jeho Rezervace, musí jej chránit před dalšími osobami a odpovídá za jeho použití svými hosty. Podezření na zneužití neprodleně oznámí Poskytovateli.",
+      includesUnlimitedAutoRenewal
+        ? "7.1 Potvrzovací e-mail obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile Poskytovatel vydá PIN k potvrzené Rezervaci, stránka zobrazí aktuální kód a dobu jeho platnosti. Držitel neomezeného členství najde v zaplaceném období aktuální PIN ve svém účtu. Přístupový PIN k členství se mění každý den. Sdílené místo (Open Space) je dostupné denně od 00:00 do 17:00 pražského času a vyhrazené místo (Reserved Desk) nepřetržitě. U Týmového stolu se zobrazené časové údaje řídí článkem 7.5."
+        : "7.1 Potvrzovací e-mail obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile Poskytovatel vydá PIN k potvrzené Rezervaci, stránka zobrazí aktuální kód a dobu jeho platnosti. PIN není obsažen v potvrzovacím e-mailu. U Týmového stolu se zobrazené časové údaje řídí článkem 7.5.",
+      includesUnlimitedAutoRenewal
+        ? "7.2 Poskytovatel může přístupový PIN změnit. Klient použije aktuální kód zobrazený na přístupové stránce Rezervace nebo ve svém účtu podle objednané Služby. Klient smí vstoupit do Prostor a užívat je pouze v době a rozsahu potvrzené Rezervace nebo zaplaceného Balíčku."
+        : "7.2 Poskytovatel může přístupový PIN změnit; Klient použije kód aktuálně zobrazený na přístupové stránce Rezervace. Zobrazení PIN kódu neprodlužuje potvrzenou dobu užívání Prostor a nezakládá právo na přístup mimo tuto dobu nebo do jiných prostor. Používání Prostor je možné pouze v potvrzené době Rezervace.",
+      includesUnlimitedAutoRenewal
+        ? "7.3 Držitel Balíčku nesmí nikomu sdělit svůj osobní PIN. Klient smí sdělit PIN k Rezervaci pouze osobám oprávněným účastnit se této Rezervace a odpovídá za jeho použití těmito hosty. Podezření na zneužití neprodleně oznámí Poskytovateli."
+        : "7.3 Klient smí PIN kód sdělit pouze osobám oprávněným účastnit se jeho Rezervace, musí jej chránit před dalšími osobami a odpovídá za jeho použití svými hosty. Podezření na zneužití neprodleně oznámí Poskytovateli.",
       "7.4 Klient a jeho hosté jsou povinni dodržovat kapacitu, účel Rezervace, potvrzený čas a Provozní řád. Klient zajistí, aby hosté Prostory opustili nejpozději na konci Rezervace.",
       "7.5 U Týmového stolu používá Klient a jeho hosté společný přístupový PIN kód. Přístupová stránka zobrazuje přesný začátek a konec Rezervace. Zamykací systém může platnost PIN kódu zaokrouhlit tak, že začátek platnosti posune dolů a konec nahoru na celé hodiny. Potvrzená doba užívání se nemění.",
       "7.6 Po zaplacení a potvrzení Rezervace Týmového stolu může Klient na stránce jejího stavu přidávat pozvané osoby až do konce Rezervace. Celkový počet účastníků včetně Klienta, pokud se účastní, nesmí překročit kapacitu stolu. Pozvané osoby mohou přes pozvánku otevřít přístupovou stránku. Po zaplacení a potvrzení Rezervace nelze pozvané osoby odebrat, protože mají přístup ke společnému PIN kódu.",
@@ -128,15 +153,20 @@ const termsAndConditionsSections: LegalSection[] = [
         </a>
         . Lhůta je zachována, je-li oznámení odesláno před jejím uplynutím.
         Odstoupení lze také odeslat online funkcí „Odstoupit od smlouvy“ u
-        Rezervace v zákaznickém účtu na webu nebo v aplikaci a potvrdit
-        tlačítkem „Potvrdit odstoupení od smlouvy“. Přijetí odstoupení
-        Poskytovatel bez zbytečného odkladu potvrdí e-mailem na adresu účtu,
-        včetně obsahu prohlášení a data a času jeho odeslání.
+        Rezervace v zákaznickém účtu na webu nebo v aplikaci, případně na
+        stránce stavu objednávky balíčku nebo členství, a potvrdit tlačítkem
+        „Potvrdit odstoupení od smlouvy“. Přijetí odstoupení Poskytovatel bez
+        zbytečného odkladu potvrdí e-mailem na adresu účtu, včetně obsahu
+        prohlášení a data a času jeho odeslání.
       </>,
       "9.4 Po platném odstoupení vrátí Poskytovatel přijaté peněžní prostředky bez zbytečného odkladu, nejpozději do 14 dnů, stejným způsobem, kterým byly přijaty, nedohodnou-li se strany jinak bez vzniku dalších nákladů Spotřebitele.",
-      "9.5 Vzor oznámení: „Oznamuji, že odstupuji od smlouvy na tuto Službu: [popis a číslo Rezervace], objednanou dne [datum]. Jméno a příjmení Spotřebitele: [doplnit]. Adresa Spotřebitele: [doplnit]. Datum: [doplnit]. Podpis pouze při listinném podání.“ Použití vzoru není povinné.",
+      includesUnlimitedAutoRenewal
+        ? "9.5 Vzor oznámení (nepovinný). „Oznamuji, že odstupuji od smlouvy na tuto Službu [popis a číslo objednávky], objednanou dne [datum]. Jméno a příjmení Spotřebitele [doplnit]. Adresa Spotřebitele [doplnit]. Datum [doplnit]. Podpis pouze při listinném podání.“"
+        : "9.5 Vzor oznámení: „Oznamuji, že odstupuji od smlouvy na tuto Službu: [popis a číslo Rezervace], objednanou dne [datum]. Jméno a příjmení Spotřebitele: [doplnit]. Adresa Spotřebitele: [doplnit]. Datum: [doplnit]. Podpis pouze při listinném podání.“ Použití vzoru není povinné.",
       "9.6 Práva podle tohoto článku náleží pouze Spotřebiteli a platí vedle případných výhodnějších storno podmínek uvedených v souhrnu objednávky nebo individuální nabídce.",
-      "9.7 Odstoupí-li Spotřebitel platně od smlouvy o nákupu balíčku vstupů poté, co požádal o jeho okamžité využití, a jsou-li splněny zákonné podmínky pro úhradu poměrné části ceny, vrátí Poskytovatel skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku, zaokrouhlenou dolů na celé koruny. Za využité se považují vstupy za předchozí návštěvy a vstup rezervovaný na den odstoupení. Rezervace na pozdější dny se zruší a tyto vstupy se považují za nevyužité.",
+      includesUnlimitedAutoRenewal
+        ? "9.7 Spotřebitel, který platně odstoupí po výslovné žádosti o zahájení plnění před uplynutím lhůty pro odstoupení, uhradí poměrnou část ceny jen při splnění zákonných podmínek. U balíčku vstupů Poskytovatel vrátí skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku. Za využité se počítají předchozí návštěvy a vstup rezervovaný na den odstoupení. Pozdější Rezervace se zruší a tyto vstupy se počítají jako nevyužité. U neomezeného členství Poskytovatel vrátí skutečně zaplacenou cenu za období vynásobenou počtem nevyužitých kalendářních dnů podle pražského času a vydělenou 30. Pokud už poskytování služby začalo, Spotřebitel má přístup ještě do konce dne odstoupení. Tento den se počítá jako využitý. V obou případech se vracená částka zaokrouhlí dolů na celé koruny. Platným odstoupením podle zákona se také ukončí automatické obnovování."
+        : "9.7 Odstoupí-li Spotřebitel platně od smlouvy o nákupu balíčku vstupů poté, co požádal o jeho okamžité využití, a jsou-li splněny zákonné podmínky pro úhradu poměrné části ceny, vrátí Poskytovatel skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku, zaokrouhlenou dolů na celé koruny. Za využité se považují vstupy za předchozí návštěvy a vstup rezervovaný na den odstoupení. Rezervace na pozdější dny se zruší a tyto vstupy se považují za nevyužité.",
       "9.8 Pro účely odstoupení tvoří Rezervace Týmového stolu jeden celek. Spotřebitel může ve 14denní lhůtě podle článku 9.1 odstoupit od celé Rezervace pouze před jejím potvrzeným začátkem. Poskytovatel v takovém případě vrátí celou zaplacenou cenu. Od potvrzeného začátku Rezervace již nelze odstoupit ani od její zbývající části.",
     ],
   },
@@ -153,7 +183,9 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "11. Odpovědnost Poskytovatele",
     body: [
       "11.1 Poskytovatel odpovídá za řádné poskytnutí potvrzené Služby a za újmu v rozsahu stanoveném právními předpisy. Nic v těchto VOP nevylučuje ani neomezuje odpovědnost, kterou nelze platně vyloučit, ani zákonná práva Spotřebitele.",
-      "11.2 Klient odpovídá za svou podnikatelskou činnost, vlastní data a věci vnesené do Prostor. Poskytovatel odpovídá za ztrátu nebo poškození věci pouze v rozsahu stanoveném právními předpisy; Klient proto nenechává věci bez dozoru a přiměřeně je zabezpečí.",
+      includesUnlimitedAutoRenewal
+        ? "11.2 Klient odpovídá za svou podnikatelskou činnost a vlastní data a přiměřeně zabezpečí věci, které do Prostor přinese. Kdy může věci ponechat na přiděleném vyhrazeném místě, stanoví bod 16.8 a Provozní řád. Poskytovatel odpovídá za ztrátu nebo poškození věcí v rozsahu stanoveném právními předpisy."
+        : "11.2 Klient odpovídá za svou podnikatelskou činnost, vlastní data a věci vnesené do Prostor. Poskytovatel odpovídá za ztrátu nebo poškození věci pouze v rozsahu stanoveném právními předpisy; Klient proto nenechává věci bez dozoru a přiměřeně je zabezpečí.",
       "11.3 Poskytovatel neodpovídá za překážku vzniklou nezávisle na jeho vůli, kterou nemohl rozumně předvídat ani odvrátit. Trvá-li taková překážka nebo dočasná nedostupnost tak, že podstatná část potvrzené Služby nemůže být poskytnuta, postupuje se podle článku 6.4.",
       "11.4 Vůči Klientovi, který není Spotřebitelem, Poskytovatel v maximálním rozsahu dovoleném zákonem neodpovídá za nepřímou újmu, ušlý zisk nebo ztrátu dat, pokud je nezpůsobil úmyslně nebo z hrubé nedbalosti.",
     ],
@@ -161,7 +193,7 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "12. Vady a reklamace",
     body: [
-      "12.1 Klient oznámí vadu Služby bez zbytečného odkladu, aby ji bylo možné napravit, a uvede alespoň své kontaktní údaje, číslo Rezervace, popis vady a požadovaný způsob vyřízení.",
+      "12.1 Klient oznámí vadu Služby bez zbytečného odkladu, aby ji bylo možné napravit, a uvede alespoň své kontaktní údaje, číslo Rezervace nebo objednávky podle druhu Služby, popis vady a požadovaný způsob vyřízení.",
       <>
         12.2 Reklamaci lze uplatnit v provozovně, na adrese Poskytovatele nebo
         e-mailem na{" "}
@@ -206,14 +238,21 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "15. Závěrečná ustanovení",
     body: [
-      "15.1 Poskytovatel může tyto VOP měnit pro smlouvy uzavřené po účinnosti nového znění. Na již uzavřenou Rezervaci se použije znění přijaté Klientem při objednávce, není-li pozdější změna pro Klienta výhodnější nebo ji výslovně nepřijme.",
+      includesUnlimitedAutoRenewal
+        ? "15.1 Poskytovatel může tyto VOP měnit pro smlouvy uzavřené po účinnosti nového znění. Pro již uzavřenou smlouvu platí znění přijaté při objednávce, ledaže je pozdější změna pro Klienta výhodnější nebo ji Klient výslovně přijme."
+        : "15.1 Poskytovatel může tyto VOP měnit pro smlouvy uzavřené po účinnosti nového znění. Na již uzavřenou Rezervaci se použije znění přijaté Klientem při objednávce, není-li pozdější změna pro Klienta výhodnější nebo ji výslovně nepřijme.",
       "15.2 Odchylné individuální ujednání má přednost před těmito VOP. Neplatnost nebo neúčinnost jednoho ustanovení nemá vliv na ostatní ustanovení.",
-      "15.3 Tyto VOP nabývají účinnosti dne 1. 12. 2026.",
+      includesUnlimitedAutoRenewal
+        ? "15.3 Toto znění se použije na smlouvy uzavřené ode dne jeho účinnosti. Ustanovení článku 16 o automatickém obnovování platí, pokud je obnovování nabízeno a Klient k němu udělí samostatný souhlas."
+        : "15.3 Tyto VOP nabývají účinnosti dne 1. 12. 2026.",
     ],
   },
+  ...(includesUnlimitedAutoRenewal ? [unlimitedAutoRenewalSection] : []),
 ];
 
-const operatingRulesSections: LegalSection[] = [
+const operatingRulesSections = (
+  includesUnlimitedAutoRenewal: boolean
+): LegalSection[] => [
   {
     heading: "1. Úvodní ustanovení",
     body: [
@@ -259,6 +298,27 @@ const operatingRulesSections: LegalSection[] = [
       "4.3 Uživatel je povinen udržovat pořádek a čistotu a po skončení užívání uvést využívané místo a společné vybavení do odpovídajícího stavu.",
       "4.4 Uživatel nesmí bez souhlasu Provozovatele přemisťovat vybavení, provádět úpravy, instalovat zařízení nebo zasahovat do technických rozvodů.",
       "4.5 Uživatel používá audiovizuální, konferenční a jiné vybavení podle pokynů a bez zbytečného odkladu oznámí závadu. Po skončení rezervace zařízení bezpečně vypne, vyžaduje-li to jeho povaha.",
+      ...(includesUnlimitedAutoRenewal
+        ? [
+            <>
+              4.6 Uživatel může na přiděleném vyhrazeném místě (Reserved Desk)
+              ponechat své věci přes noc, dokud trvá jeho zaplacený přístup.
+              Věci musí odnést nejpozději při skončení zaplaceného přístupu, i
+              když se obnovení nezdařilo. Vyzvednutí věcí ponechaných v
+              prostorách si může domluvit s Provozovatelem na adrese{" "}
+              <a
+                className="text-burned-orange underline underline-offset-4"
+                href={`mailto:${contactEmail}`}
+              >
+                {contactEmail}
+              </a>
+              . Tím není dotčena povinnost Provozovatele pečovat o věci s
+              náležitou péčí v rozsahu stanoveném právními předpisy ani
+              odpovědnost, kterou podle českého práva nelze vyloučit nebo
+              omezit.
+            </>,
+          ]
+        : []),
     ],
   },
   {
@@ -274,8 +334,12 @@ const operatingRulesSections: LegalSection[] = [
       "6.1 Uživatel je povinen dbát na bezpečnost svou i ostatních osob.",
       "6.2 Uživatel nesmí blokovat únikové cesty ani jinak ohrožovat bezpečný provoz prostor.",
       "6.3 Uživatel je povinen bez zbytečného odkladu upozornit Provozovatele na vznik nebezpečné situace nebo závady.",
-      "6.4 Přístupový PIN kód smí Klient sdělit pouze osobám oprávněným účastnit se jeho rezervace. Uživatelé jej chrání před zpřístupněním nebo odpozorováním neoprávněnou osobou a při zadávání dbají zvýšené opatrnosti.",
-      "6.5 Zobrazení PIN kódu na přístupové stránce Rezervace nijak neomezuje ani neprodlužuje dobu oprávněného užívání prostor; o přijímání kódu rozhoduje výhradně zamykací systém. Uživatelé smějí vstoupit a pobývat v prostorách pouze v potvrzené době Rezervace.",
+      includesUnlimitedAutoRenewal
+        ? "6.4 Uživatelé nesmějí osobní PIN k Balíčku sdělit jiné osobě. PIN k Rezervaci smí Klient sdělit pouze osobám oprávněným účastnit se této Rezervace. Uživatelé dbají na to, aby kód nezjistila ani neodpozorovala neoprávněná osoba."
+        : "6.4 Přístupový PIN kód smí Klient sdělit pouze osobám oprávněným účastnit se jeho rezervace. Uživatelé jej chrání před zpřístupněním nebo odpozorováním neoprávněnou osobou a při zadávání dbají zvýšené opatrnosti.",
+      includesUnlimitedAutoRenewal
+        ? "6.5 Uživatelé použijí aktuální přístupový PIN. Vstoupit do prostor a pobývat v nich mohou pouze v době a rozsahu potvrzené Rezervace nebo zaplaceného Balíčku. Členství pro sdílené místo (Open Space) umožňuje přístup denně od 00:00 do 17:00 pražského času. Členství pro vyhrazené místo (Reserved Desk) umožňuje během zaplaceného období nepřetržitý přístup."
+        : "6.5 Zobrazení PIN kódu na přístupové stránce Rezervace nijak neomezuje ani neprodlužuje dobu oprávněného užívání prostor; o přijímání kódu rozhoduje výhradně zamykací systém. Uživatelé smějí vstoupit a pobývat v prostorách pouze v potvrzené době Rezervace.",
       "6.6 Dveře ani jiné zabezpečené vstupy nesmějí být ponechány otevřené. Podezření na zneužití kódu nebo vstup neoprávněné osoby Uživatel neprodleně oznámí Provozovateli.",
       "6.7 Klient zajistí bezpečný příchod a odchod svých hostů a nesmí jim umožnit přístup mimo potvrzenou dobu nebo do jiných než oprávněně užívaných prostor.",
       "6.8 Provozovatel nebo jím pověřená osoba může vstoupit do rezervovaného prostoru, je-li to nutné kvůli mimořádné události, bezpečnosti, odvrácení škody nebo nezbytné údržbě; pokud to okolnosti dovolují, Klienta předem informuje.",
@@ -300,15 +364,19 @@ const operatingRulesSections: LegalSection[] = [
   {
     heading: "9. Závěrečná ustanovení",
     body: [
-      "9.1 Provozovatel může tento Provozní řád měnit pro budoucí rezervace. Pro již potvrzenou rezervaci je rozhodné znění přijaté při objednávce, nejsou-li bezodkladná opatření nutná z důvodu bezpečnosti nebo kogentního právního předpisu.",
-      "9.2 Tento Provozní řád nabývá účinnosti dne 1. 12. 2026.",
+      includesUnlimitedAutoRenewal
+        ? "9.1 Provozovatel může tento Provozní řád měnit pro budoucí objednávky. Pro již uzavřenou objednávku platí znění přijaté při objednávce, ledaže jsou bezodkladná opatření nutná kvůli bezpečnosti nebo kogentnímu právnímu předpisu."
+        : "9.1 Provozovatel může tento Provozní řád měnit pro budoucí rezervace. Pro již potvrzenou rezervaci je rozhodné znění přijaté při objednávce, nejsou-li bezodkladná opatření nutná z důvodu bezpečnosti nebo kogentního právního předpisu.",
+      includesUnlimitedAutoRenewal
+        ? "9.2 Toto znění se použije na objednávky zadané ode dne jeho účinnosti."
+        : "9.2 Tento Provozní řád nabývá účinnosti dne 1. 12. 2026.",
     ],
   },
 ];
 
-export const legalDocuments = {
+const membershipLegalDocuments = (includesUnlimitedAutoRenewal: boolean) => ({
   "privacy-policy": {
-    updatedAt: "1. prosince 2026",
+    updatedAt: revisedDocumentDate,
     sections: [
       {
         heading: "1. Správce",
@@ -364,6 +432,11 @@ export const legalDocuments = {
             účetním dokladu. Od poskytovatele plateb nezískáváme úplné údaje
             vaší platební karty.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "Pokud si zvolíte automatické obnovování, zaznamenáme, co jste povolili a kdy, sjednanou částku a termíny dalších plateb, přijaté podmínky a případné zrušení obnovování. Pro povolené platby používáme opakovaně použitelnou platební referenci od Nexi. Údaje o kartě zpracovává Nexi. Úplné číslo karty ani bezpečnostní kód (CVV) od Nexi nedostáváme.",
+              ]
+            : []),
           <>
             Pokud si vytvoříte zákaznický účet, zpracováváme vaši ověřenou
             e-mailovou adresu, údaje profilu a přihlašovací údaje potřebné k
@@ -425,6 +498,11 @@ export const legalDocuments = {
             storna nebo reklamace, prevenci duplicitních či podvodných
             objednávek a podpoře Rezervace, když nás kontaktujete.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "Pokud povolíte automatické obnovování, používáme údaje o objednávce a platbě k obnovení členství, vyřízení zrušení a zaslání potvrzení a případných faktur. Na váš e-mail zasíláme provozní připomínku sedm kalendářních dnů před každou plánovanou platbou bez ohledu na váš souhlas s marketingem.",
+              ]
+            : []),
           <>
             Údaje zákaznického účtu používáme k vašemu ověření, správě vašeho
             profilu a propojení účtu s rezervacemi vytvořenými se stejnou
@@ -485,6 +563,11 @@ export const legalDocuments = {
             Účetní a transakční záznamy zpracováváme také pro splnění právních
             povinností.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "Opakované platby, připomínky a zrušení obnovování zpracováváme za účelem plnění smlouvy o členství. Účetní a platební záznamy a záznamy o povolení plateb uchováváme v rozsahu nezbytném ke splnění právních povinností. V nezbytném rozsahu se také opíráme o oprávněný zájem na určení, výkonu nebo obhajobě právních nároků, pokud nad ním nepřevažují vaše práva.",
+              ]
+            : []),
           <>
             Přihlášení k účtu, správu profilu a historii rezervací zpracováváme,
             abychom poskytli službu účtu, o kterou si žádáte, a podle okolností
@@ -547,6 +630,11 @@ export const legalDocuments = {
             nutnou k určení, výkonu či obhajobě právních nároků. Technické
             signály pro ochranu před zneužitím jsou krátkodobé.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "Pokud zrušíte obnovování nebo smažete svůj účet, zneplatníme oprávnění k budoucím platbám a platební referenci pro toto členství přestaneme používat. Záznamy o povolení plateb, zrušení obnovování a transakcích uchováváme jen po zákonem vyžadovanou dobu nebo po dobu rozumně potřebnou k určení, výkonu či obhajobě právních nároků.",
+              ]
+            : []),
           <>
             Zákaznický účet uchováváme po dobu jeho používání; přihlašovací
             relace a odkazy automaticky vyprší a pravidelně je mažeme. Smazáním
@@ -591,9 +679,12 @@ export const legalDocuments = {
             nezbytném pro jejich roli poskytovatelé hostingu, rezervačního a
             zákaznického systému, zpracování plateb, doručování e-mailů, tvorby
             účetních dokladů, zabezpečení, analytiky, externího měření a dalších
-            technických služeb. Platební údaje předáváme poskytovateli plateb
-            pouze pro vytvoření a ověření transakce. Pro přístup poskytovatelů
-            používáme přiměřené smluvní, organizační a technické záruky.
+            technických služeb.{" "}
+            {includesUnlimitedAutoRenewal
+              ? "Údaje potřebné pro zpracování a ověření karetních plateb předáváme společnosti Nexi. Pokud povolíte automatické obnovování, používáme platební referenci od Nexi ke zpracování povolených opakovaných plateb."
+              : "Platební údaje předáváme poskytovateli plateb pouze pro vytvoření a ověření transakce."}{" "}
+            Pro přístup poskytovatelů používáme přiměřené smluvní, organizační a
+            technické záruky.
           </>,
           <>
             Zákaznické profily a rezervace vedeme v našem rezervačním systému
@@ -702,6 +793,21 @@ export const legalDocuments = {
       },
     ],
   },
+  "terms-and-conditions": {
+    updatedAt: revisedDocumentDate,
+    sections: termsAndConditionsSections(includesUnlimitedAutoRenewal),
+  },
+  "operating-rules": {
+    updatedAt: revisedDocumentDate,
+    sections: operatingRulesSections(includesUnlimitedAutoRenewal),
+  },
+});
+
+export const unlimitedAutoRenewalLegalDocuments =
+  membershipLegalDocuments(true);
+
+export const legalDocuments = {
+  ...membershipLegalDocuments(false),
   "marketing-communications": {
     updatedAt: "5. srpna 2026",
     sections: [
@@ -773,10 +879,6 @@ export const legalDocuments = {
         ],
       },
     ],
-  },
-  "terms-and-conditions": {
-    updatedAt: "1. prosince 2026",
-    sections: termsAndConditionsSections,
   },
   "cookie-policy": {
     updatedAt: "19. listopadu 2026",
@@ -884,9 +986,5 @@ export const legalDocuments = {
         ],
       },
     ],
-  },
-  "operating-rules": {
-    updatedAt: "1. prosince 2026",
-    sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

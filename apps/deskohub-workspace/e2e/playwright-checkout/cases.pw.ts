@@ -1,19 +1,25 @@
 import {
   makeInstantNavigationFlowEnvironment,
+  unlimitedPassAutoRenewalCaseEnabled,
+  unlimitedPassReviewOnly,
   workspaceE2EFlowSelection,
 } from "../e2e-env";
 import { isWorkspaceE2ECaseSelected } from "../flows";
 import {
   isWorkspaceE2EReferralCaseId,
+  unlimitedPassAutoRenewalCaseId,
   workspaceE2ECasePoolOrder,
 } from "./case-catalog";
 import { registerWorkspaceE2ECases, test } from "./fixtures";
 
-const flowSelection = workspaceE2EFlowSelection(
-  makeInstantNavigationFlowEnvironment()
-);
+const environment = makeInstantNavigationFlowEnvironment();
+const flowSelection = workspaceE2EFlowSelection(environment);
 const selectedCasePoolOrder = workspaceE2ECasePoolOrder.filter((caseId) =>
-  isWorkspaceE2ECaseSelected(caseId, flowSelection)
+  isWorkspaceE2ECaseSelected(caseId, flowSelection, {
+    includeUnlimitedPassAutoRenewal:
+      unlimitedPassAutoRenewalCaseEnabled(environment),
+    unlimitedPassReviewOnly: unlimitedPassReviewOnly(environment),
+  })
 );
 
 test.describe("workspace checkout", () => {
@@ -24,6 +30,8 @@ test.describe("workspace checkout", () => {
     // booker in the admin flow and engine waits, and every other submitting
     // case signs in as its own seeded booker.
     bindCase: async (input) => {
+      if (input.testCase.id === unlimitedPassAutoRenewalCaseId)
+        return input.testCase;
       if (isWorkspaceE2EReferralCaseId(input.testCase.id)) {
         const { bindWorkspaceE2EReferralCase } = await import(
           "../referrals/cases"

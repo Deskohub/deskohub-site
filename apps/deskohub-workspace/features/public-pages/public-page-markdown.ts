@@ -40,13 +40,14 @@ export interface PublicPageMarkdownSources {
    */
   readonly isPublished: (pathname: PublicPagePathname) => boolean;
   /** Whether cowork passes are released for every visitor. */
-  readonly coworkPassesPublished?: boolean;
   /** Every bookable product with its advertised price, in catalog order. */
   readonly offerings: Effect.Effect<ReadonlyArray<PublicOffering>>;
   /** Live configured sizes with their regular rates and optional sale. */
   readonly teamTablePrices: Effect.Effect<ReadonlyArray<TeamTablePrice>>;
   /** The home page's sale banner while a sale runs. */
   readonly saleBanner: Effect.Effect<LandingPageSaleBannerContent | undefined>;
+  /** Pass purchase options shown on the pricing page while released. */
+  readonly pricingPasses?: { readonly offersAutoRenewal: boolean };
 }
 
 export interface PublicPageMarkdown {

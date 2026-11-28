@@ -9,6 +9,7 @@ import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
 import { canHolderViewPassOrderStatus } from "@/features/passes/backend/pass-order-status-access";
+import { listUnlimitedAutoRenewals } from "@/features/passes/backend/unlimited-auto-renewal-management";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
   getPassPurchaseStatusPath,
@@ -24,6 +25,7 @@ import {
   catchRecoverableCause,
   runWorkspaceEffectOrElse,
 } from "@/shared/backend/workspace-effect";
+import { formatMoney } from "@/shared/money/money";
 import {
   formatInstantDate,
   formatPlainDate,
@@ -31,6 +33,15 @@ import {
 } from "@/shared/utils/date-time-format";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { currentInstant } from "@/shared/utils/temporal";
+
+export type AccountUnlimitedAutoRenewal =
+  | {
+      readonly status: "pending";
+      readonly nextRenewalOn: string;
+      readonly amount: string;
+    }
+  | { readonly status: "cancelled" }
+  | { readonly status: "unavailable" };
 
 export type AccountUnlimitedPass = {
   readonly orderId: OrderId;
@@ -40,6 +51,7 @@ export type AccountUnlimitedPass = {
   readonly period: string;
   readonly statusPath?: string;
   readonly renewalPath?: string;
+  readonly autoRenewal?: AccountUnlimitedAutoRenewal;
   readonly seating:
     | { readonly kind: "shared" }
     | { readonly kind: "assigned"; readonly name?: string };
@@ -64,18 +76,25 @@ export const loadAccountUnlimitedPasses = Effect.fn(
 )(function* (locale: Locale) {
   const account = yield* CurrentCustomerAccount;
   const standing = yield* account.peek;
-  if (
-    (standing.kind !== "linked" && standing.kind !== "unlinked") ||
-    standing.reviewMarker !== "absent"
-  ) {
-    return [];
-  }
+  if (standing.kind === "unavailable") return "unavailable" as const;
+  if (standing.kind !== "linked" && standing.kind !== "unlinked") return [];
+  if (standing.reviewMarker === "unreadable") return "unavailable" as const;
 
   const { accountId, verifiedSignInAt } = standing.session;
   yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
   const timeZone = workspaceSiteConstants.location.timeZone;
-  const [passes, now] = yield* Effect.all(
-    [listHeldUnlimitedPasses(accountId), currentInstant],
+  const { passes, now, autoRenewals } = yield* Effect.all(
+    {
+      passes: listHeldUnlimitedPasses(accountId),
+      now: currentInstant,
+      autoRenewals: listUnlimitedAutoRenewals(accountId).pipe(
+        catchRecoverableCause(() =>
+          Effect.logWarning("account.unlimited-auto-renewals.unavailable").pipe(
+            Effect.as("unavailable" as const)
+          )
+        )
+      ),
+    },
     { concurrency: "unbounded" }
   );
   const today = getCurrentWorkspaceDate(now);
@@ -109,6 +128,16 @@ export const loadAccountUnlimitedPasses = Effect.fn(
             kind: "assigned",
             name: pass.deskId ? deskNames.get(pass.deskId) : undefined,
           } as const);
+    const autoRenewal =
+      autoRenewals === "unavailable"
+        ? undefined
+        : autoRenewals.get(pass.orderId);
+    const renewalUnavailable =
+      autoRenewals === "unavailable" &&
+      pass.autoRenew &&
+      pass.paymentState === "paid" &&
+      pass.buyerAccountId === accountId &&
+      (pass.status === "active" || pass.status === "expired");
     const summary = {
       orderId: pass.orderId,
       tier: getPassTierName(pass.tier, locale),
@@ -119,6 +148,22 @@ export const loadAccountUnlimitedPasses = Effect.fn(
         pass.paymentState === "paid" && pass.buyerAccountId !== accountId,
       period,
       seating,
+      ...(renewalUnavailable && {
+        autoRenewal: { status: "unavailable" as const },
+      }),
+      ...(autoRenewal && {
+        autoRenewal:
+          autoRenewal.status === "pending"
+            ? {
+                status: autoRenewal.status,
+                nextRenewalOn: formatPlainDate({
+                  date: Temporal.PlainDate.from(autoRenewal.nextRenewalOn),
+                  locale,
+                }),
+                amount: formatMoney(autoRenewal.amount, locale),
+              }
+            : { status: autoRenewal.status },
+      }),
       ...(canHolderViewPassOrderStatus(pass, accountId) && {
         statusPath: getPassPurchaseStatusPath(locale, pass.orderId),
       }),

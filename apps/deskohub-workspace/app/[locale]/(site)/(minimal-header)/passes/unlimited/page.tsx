@@ -14,6 +14,7 @@ import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend
 import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
 import { readPassCheckoutHandoffForPage } from "@/features/passes/backend/pass-checkout-handoff";
 import { readPassPurchaseBuyer } from "@/features/passes/backend/pass-purchase-buyer";
+import { offersUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal";
 import {
   loadUnlimitedCheckoutContinuation,
   readUnlimitedCheckoutRenewal,
@@ -62,6 +63,7 @@ type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly legacyPredecessorOrder?: string | string[];
   readonly predecessorMode?: string | string[];
   readonly renew?: string | string[];
+  readonly autoRenew?: string | string[];
   readonly handoff?: string | string[];
 };
 
@@ -253,6 +255,8 @@ async function UnlimitedPassPageContent({
   if (query.renew !== undefined && !Schema.is(orderIdSchema)(query.renew))
     notFound();
   const requestedRenewal = query.renew;
+  const offersAutoRenewal = offersUnlimitedAutoRenewal(locale) && !handoffToken;
+  const requestedAutoRenew = offersAutoRenewal && query.autoRenew === "true";
   const orderId = order?.kind === "edit" ? undefined : order?.orderId;
   const isPaymentStep = order?.kind === "resume" && query.step === "pay";
   const continuationMode = order?.kind === "submitted" ? "submitted" : "draft";
@@ -263,7 +267,8 @@ async function UnlimitedPassPageContent({
   const checkoutPath = (
     targetLocale: Locale,
     selection: typeof requestedSelection = requestedSelection,
-    renewsPassId = requestedRenewal
+    renewsPassId = requestedRenewal,
+    autoRenew = requestedAutoRenew
   ) => {
     if (isPaymentStep && orderId)
       return getUnlimitedPassPayPath(targetLocale, orderId);
@@ -272,17 +277,19 @@ async function UnlimitedPassPageContent({
         targetLocale,
         selection,
         order,
-        renewsPassId
+        renewsPassId,
+        autoRenew
       );
     }
     if (renewsPassId && !order && query.tier === undefined)
-      return getUnlimitedRenewalPath(targetLocale, renewsPassId);
+      return getUnlimitedRenewalPath(targetLocale, renewsPassId, autoRenew);
     return getUnlimitedPassChoosePath(
       targetLocale,
       selection ?? options,
       selection?.startDate,
       order,
-      renewsPassId
+      renewsPassId,
+      autoRenew
     );
   };
   const [checkout, continuation] = await Promise.all([
@@ -394,6 +401,10 @@ async function UnlimitedPassPageContent({
       }
     : undefined;
   const initialPayment = draft?.kind === "pay" ? draft.payment : undefined;
+  const autoRenewAvailable = offersAutoRenewal && !draft?.holderEmail;
+  const initialAutoRenew =
+    autoRenewAvailable &&
+    (resumesDraft && draft ? draft.autoRenew === true : requestedAutoRenew);
   if (
     orderId &&
     draft?.kind === "pay" &&
@@ -405,12 +416,15 @@ async function UnlimitedPassPageContent({
         draft.locale,
         draft.selection,
         { kind: "resume", orderId },
-        renewsPassId
+        renewsPassId,
+        initialAutoRenew
       )
     );
   }
   if (draft && draft.locale !== locale) {
-    redirect(checkoutPath(draft.locale, selection, renewsPassId));
+    redirect(
+      checkoutPath(draft.locale, selection, renewsPassId, initialAutoRenew)
+    );
   }
 
   const { today } = checkout;
@@ -420,6 +434,8 @@ async function UnlimitedPassPageContent({
       <UnlimitedPassCheckout
         locale={locale}
         buyer={checkout.buyer}
+        autoRenewAvailable={autoRenewAvailable}
+        initialAutoRenew={initialAutoRenew}
         discountCodeEntryEnabled={checkout.discountCodeEntryEnabled}
         initialOptions={selection ?? options}
         initialStartDate={selection?.startDate}
@@ -447,6 +463,7 @@ async function UnlimitedPassPageContent({
                 selection: draft.selection,
                 state: {
                   ...initialPayment,
+                  ...(draft.autoRenew && { autoRenew: draft.autoRenew }),
                   holderEmail: draft.holderEmail,
                 },
               }

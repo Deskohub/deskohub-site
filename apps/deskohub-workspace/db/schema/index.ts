@@ -137,6 +137,7 @@ export {
   type StoredDiscount,
   standaloneAccessCodeAttemptEvents,
   teamTableHoldClaims,
+  unlimitedAutoRenewalAuthorizations,
   unlimitedPassDayMoves,
   unlimitedPassSupersessions,
   type Voucher,

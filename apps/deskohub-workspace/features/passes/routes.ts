@@ -28,8 +28,17 @@ export const getPassCheckoutHandoffPath = (
   return withPassCheckoutHandoff(`/${locale}${path}?step=details`, token);
 };
 
-export const getUnlimitedRenewalPath = (locale: Locale, orderId: OrderId) =>
-  `/${locale}${unlimitedPassCheckoutPath}?renew=${encodeURIComponent(orderId)}`;
+export const getUnlimitedRenewalPath = (
+  locale: Locale,
+  orderId: OrderId,
+  autoRenew?: boolean
+) => {
+  const query = new URLSearchParams({
+    renew: orderId,
+    ...(autoRenew && { autoRenew: "true" }),
+  });
+  return `/${locale}${unlimitedPassCheckoutPath}?${query}`;
+};
 
 export const getUnlimitedAccessPath = (locale: Locale, orderId: OrderId) =>
   `/${locale}${reservationAccessPath}/${encodeURIComponent(orderId)}`;

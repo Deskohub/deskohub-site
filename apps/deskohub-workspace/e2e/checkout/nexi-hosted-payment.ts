@@ -76,7 +76,7 @@ export const completeNexiHostedPayment = ({
   timeouts,
 }: {
   challengeOutcome?: NexiChallengeOutcome;
-  data: CheckoutData;
+  data: Pick<CheckoutData, "email" | "name">;
   hostedPaymentPage?: HostedPaymentPage;
   // Called just before the Pay activation, which is the only step that asks
   // Nexi to authorize the payment.

@@ -1,8 +1,18 @@
 import { Effect } from "effect";
 import { publicOfferingsMarkdown } from "@/features/checkout/public-offerings-markdown";
 import { getWorkspacePageUrl, type Locale, m } from "@/features/i18n";
-import { unlimitedPassOffers } from "@/features/passes/pass-offer";
+import {
+  getEntryPackPricePerDay,
+  getEntryPackPurchasePath,
+} from "@/features/passes/entry-pack-discovery";
+import {
+  entryPackOffers,
+  passTiers,
+  unlimitedPassDays,
+  unlimitedPassOffers,
+} from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
+import { getUnlimitedPassPurchasePath } from "@/features/passes/unlimited-pass-discovery";
 import type { PublicPageMarkdownSources } from "@/features/public-pages/public-page-markdown";
 import { tableReservationPath } from "@/features/reservation/routes";
 import {
@@ -17,6 +27,7 @@ import { formatMoney } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { getPriceFamilies } from "./price-family";
 import { teamTablePriceMarkdown } from "./team-table-price-markdown";
+import { getUnlimitedPassPriceCopy } from "./unlimited-pass-price-copy";
 
 /**
  * The price page as Markdown: the opening hours, every offering at its
@@ -24,11 +35,7 @@ import { teamTablePriceMarkdown } from "./team-table-price-markdown";
  */
 export const pricingPageMarkdown = (
   locale: Locale,
-  {
-    coworkPassesPublished,
-    offerings,
-    teamTablePrices,
-  }: PublicPageMarkdownSources
+  { offerings, pricingPasses, teamTablePrices }: PublicPageMarkdownSources
 ): Effect.Effect<MarkdownBlocks> => {
   const { address } = workspaceSiteConstants.location;
   const { openSpaceUsableUntil } = workspaceSiteConstants.openingHours;
@@ -56,28 +63,8 @@ export const pricingPageMarkdown = (
         ({ kind, title, offerings: rows }) => [
           markdownHeading(2, title),
           publicOfferingsMarkdown(rows, locale),
-          ...(kind === "cowork" && coworkPassesPublished
-            ? [
-                markdownHeading(2, m.passUnlimited({}, { locale })),
-                markdownParagraph(
-                  m.unlimitedPassDiscoveryIntro({}, { locale })
-                ),
-                markdownList(
-                  unlimitedPassOffers.map(({ product, price, validityDays }) =>
-                    markdownListItem(
-                      getPassTierName(product.tier, locale),
-                      " · ",
-                      m.unlimitedPassDiscoveryPrice(
-                        {
-                          price: formatMoney(price, locale),
-                          days: validityDays,
-                        },
-                        { locale }
-                      )
-                    )
-                  )
-                ),
-              ]
+          ...(kind === "cowork" && pricingPasses
+            ? passPricesMarkdown(locale, pricingPasses.offersAutoRenewal)
             : []),
         ]
       ),
@@ -100,3 +87,77 @@ export const pricingPageMarkdown = (
     ]
   );
 };
+
+const passPricesMarkdown = (
+  locale: Locale,
+  offersAutoRenewal: boolean
+): MarkdownBlocks => [
+  markdownHeading(2, m.entryPackDiscoveryTitle({}, { locale })),
+  markdownParagraph(m.entryPackDiscoveryIntro({}, { locale })),
+  ...passTiers.flatMap((tier) => {
+    const name = getPassTierName(tier, locale);
+    const description = {
+      "open-space": m.entryPackDiscoveryOpenSpaceDescription,
+      "reserved-desk": m.entryPackDiscoveryReservedDeskDescription,
+      "reserved-desk-workstation": m.entryPackDiscoveryWorkstationDescription,
+    }[tier]({}, { locale });
+    return [
+      markdownHeading(3, name),
+      markdownParagraph(description),
+      markdownList(
+        entryPackOffers
+          .filter(({ product }) => product.tier === tier)
+          .map((offer) =>
+            markdownListItem(
+              `${formatMoney(offer.price, locale)}. ${m.entryPackDiscoveryValidity(
+                { entries: offer.product.size, months: offer.validityMonths },
+                { locale }
+              )}. ${m.entryPackDiscoveryPerDay(
+                { price: formatMoney(getEntryPackPricePerDay(offer), locale) },
+                { locale }
+              )}.`
+            )
+          )
+      ),
+      markdownParagraph(
+        markdownLink(
+          getWorkspacePageUrl(getEntryPackPurchasePath(locale, tier)),
+          m.entryPackDiscoveryBuyTier({ tier: name }, { locale })
+        )
+      ),
+    ];
+  }),
+  markdownHeading(2, m.passUnlimited({}, { locale })),
+  markdownParagraph(m.unlimitedPassDiscoveryIntro({}, { locale })),
+  ...(offersAutoRenewal
+    ? [
+        markdownParagraph(
+          m.unlimitedPassDiscoveryAutoRenewal(
+            { days: unlimitedPassDays },
+            { locale }
+          )
+        ),
+      ]
+    : []),
+  ...unlimitedPassOffers.flatMap(
+    ({ product: { tier }, price, validityDays }) => {
+      const name = getPassTierName(tier, locale);
+      const copy = getUnlimitedPassPriceCopy(tier, price, validityDays, locale);
+      return [
+        markdownHeading(3, name),
+        markdownParagraph(copy.description),
+        markdownList(
+          [copy.period, copy.perDay, copy.coffee].map((line) =>
+            markdownListItem(line)
+          )
+        ),
+        markdownParagraph(
+          markdownLink(
+            getWorkspacePageUrl(getUnlimitedPassPurchasePath(locale, { tier })),
+            m.unlimitedPassDiscoveryBuyTier({ tier: name }, { locale })
+          )
+        ),
+      ];
+    }
+  ),
+];

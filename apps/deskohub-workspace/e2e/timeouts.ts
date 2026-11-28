@@ -102,6 +102,8 @@ export const workspaceE2ETimeouts = {
   // app's own scripts arrive first and have to wait for it.
   temporalPolyfillResponseDelay: 3 * SECOND,
   uiTransition: 45 * SECOND,
+  unlimitedPassCase: 10 * MINUTE,
+  unlimitedPassCheckoutStart: 4 * MINUTE,
   zeroTotalCheckoutCase: 5 * MINUTE,
 } as const;
 

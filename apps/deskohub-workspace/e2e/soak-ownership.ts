@@ -6,7 +6,11 @@ import { workspaceE2EAccountCaseIds } from "./account/catalog";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "./account/config";
 import { workspaceE2EAccountLaneId } from "./account/journal";
 import type { E2EEnvironment } from "./e2e-env";
-import { nightlyCasesEnabled, workspaceE2EFlowSelection } from "./e2e-env";
+import {
+  nightlyCasesEnabled,
+  unlimitedPassAutoRenewalCaseEnabled,
+  workspaceE2EFlowSelection,
+} from "./e2e-env";
 import {
   isWorkspaceE2ECaseSelected,
   isWorkspaceE2EFlowSelected,
@@ -48,7 +52,10 @@ export const readRunOwnership = async (
   const flowSelection = workspaceE2EFlowSelection(environment);
   const caseExpected = (caseId: string) =>
     isWorkspaceE2ECaseId(caseId) &&
-    isWorkspaceE2ECaseSelected(caseId, flowSelection) &&
+    isWorkspaceE2ECaseSelected(caseId, flowSelection, {
+      includeUnlimitedPassAutoRenewal:
+        unlimitedPassAutoRenewalCaseEnabled(environment),
+    }) &&
     (plan.preparation?.office !== undefined ||
       !isWorkspaceE2EOfficeCaseId(caseId)) &&
     (plan.preparation?.table !== undefined ||

@@ -6,6 +6,9 @@ import {
   makeWorkspaceE2EEnvironment,
   nightlyCasesEnabled,
   toPlaywrightEnvironment,
+  unlimitedPassAutoRenewalCaseEnabled,
+  unlimitedPassReviewLocale,
+  unlimitedPassWorkspaceReviewOnly,
   workspaceE2EFlowSelection,
 } from "./e2e-env";
 import {
@@ -83,6 +86,99 @@ describe("Workspace E2E environment", () => {
     expect(() =>
       makeTestE2EEnvironment({ WORKSPACE_E2E_NIGHTLY_CASES: "false" })
     ).toThrow();
+  });
+
+  test("requires manual leased exact-SHA Nexi payments for Unlimited renewal", () => {
+    const selected = {
+      ...validE2ERuntimeEnvironment,
+      TARGET_SHA: "a".repeat(40),
+      WORKSPACE_E2E_ALLOCATION_SHARD: "1",
+      WORKSPACE_E2E_EXECUTION_CONTEXT: "manual",
+      WORKSPACE_E2E_FLOWS: "payments",
+      WORKSPACE_E2E_PAYMENT_PROVIDER: "nexi",
+      WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: "true",
+    };
+    const environment = makeWorkspaceE2EEnvironment(selected);
+    expect(unlimitedPassAutoRenewalCaseEnabled(environment)).toBe(true);
+    expect(
+      makeWorkspaceE2EEnvironment(toPlaywrightEnvironment(environment))
+    ).toEqual(environment);
+    const screenshotReview = {
+      ...selected,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS: "true",
+    };
+    expect(
+      unlimitedPassReviewLocale(makeWorkspaceE2EEnvironment(screenshotReview))
+    ).toBe("en-US");
+    const czech = {
+      ...screenshotReview,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ",
+    };
+    expect(
+      unlimitedPassWorkspaceReviewOnly(makeWorkspaceE2EEnvironment(czech))
+    ).toBe(true);
+    expect(
+      unlimitedPassWorkspaceReviewOnly(
+        makeInstantNavigationFlowEnvironment(czech)
+      )
+    ).toBe(true);
+    expect(unlimitedPassWorkspaceReviewOnly(environment)).toBe(false);
+    expect(
+      unlimitedPassWorkspaceReviewOnly(
+        makeWorkspaceE2EEnvironment({
+          ...czech,
+          WORKSPACE_E2E_REVIEW_SCREENSHOTS: undefined,
+        })
+      )
+    ).toBe(false);
+    for (const invalid of [
+      { TARGET_SHA: undefined },
+      { WORKSPACE_E2E_ALLOCATION_SHARD: undefined },
+      { WORKSPACE_E2E_EXECUTION_CONTEXT: "ci" },
+      { WORKSPACE_E2E_FLOWS: "all" },
+      { WORKSPACE_E2E_NIGHTLY_CASES: "true" },
+      { WORKSPACE_E2E_PAYMENT_PROVIDER: "fallback" },
+    ]) {
+      expect(() =>
+        makeWorkspaceE2EEnvironment({ ...selected, ...invalid })
+      ).toThrow("requires the leased exact-SHA payments flow");
+    }
+  });
+
+  test("forwards only a supported locale for opted-in Unlimited review", () => {
+    const review = { WORKSPACE_E2E_REVIEW_SCREENSHOTS: "true" };
+    const unlimited = { WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: "true" };
+    const czech = { WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ" };
+    expect(
+      unlimitedPassReviewLocale(makeTestE2EEnvironment({ ...review, ...czech }))
+    ).toBeUndefined();
+    expect(
+      unlimitedPassReviewLocale(
+        makeTestE2EEnvironment({ ...unlimited, ...czech })
+      )
+    ).toBeUndefined();
+    expect(
+      unlimitedPassReviewLocale(
+        makeTestE2EEnvironment({ ...review, ...unlimited })
+      )
+    ).toBe("en-US");
+    const environment = makeTestE2EEnvironment({
+      ...review,
+      ...unlimited,
+      ...czech,
+    });
+    expect(
+      unlimitedPassReviewLocale(
+        makeE2EEnvironment(toPlaywrightEnvironment(environment))
+      )
+    ).toBe("cs-CZ");
+    expect(() =>
+      makeTestE2EEnvironment({
+        ...review,
+        ...unlimited,
+        WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "de-DE",
+      })
+    ).toThrow("Invalid workspace E2E environment variables.");
   });
 
   test("does not expose application-only environment variables", () => {

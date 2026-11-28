@@ -9,8 +9,14 @@ import {
 } from "@/shared/browser/document-navigation";
 import { SignInLoading } from "./sign-in-loading";
 
-export function AccountSignInRedirect({ locale }: { readonly locale: Locale }) {
-  const signInPath = getAccountSignInPath(locale);
+export function AccountSignInRedirect({
+  locale,
+  returnTo,
+}: {
+  readonly locale: Locale;
+  readonly returnTo?: string;
+}) {
+  const signInPath = getAccountSignInPath(locale, returnTo);
 
   // A document navigation: a client one would open the sign-in modal over
   // this loading shell instead of the sign-in page. A page already leaving,

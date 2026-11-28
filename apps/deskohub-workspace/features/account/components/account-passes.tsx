@@ -9,7 +9,10 @@ import type {
   AccountUnlimitedPass,
   AccountUnlimitedPasses,
 } from "@/features/account/account-unlimited-passes.server";
-import { AccountUnlimitedPassCard } from "@/features/account/components/account-unlimited-pass";
+import {
+  AccountUnlimitedPassCard,
+  AccountUnlimitedRenewalUnavailable,
+} from "@/features/account/components/account-unlimited-pass";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import { type Locale, m } from "@/features/i18n";
 import { EntryPackMeter } from "@/features/passes/components/entry-pack-meter";
@@ -27,31 +30,35 @@ import { FocusedGiftPassCard, GiftInvitationResend } from "./account-pass-gift";
 type PassesPanelProps = {
   readonly packs: Promise<AccountPasses>;
   readonly locale: Locale;
+  readonly purchasesEnabled?: boolean;
   readonly unlimitedPasses?: AccountUnlimitedPasses;
 };
 
 export function AccountPassesPanel({
   packs,
   locale,
+  purchasesEnabled = true,
   unlimitedPasses,
 }: PassesPanelProps) {
   return (
     <AccountSectionPanel
       actions={
-        <div className="flex flex-col items-start gap-2 @xl:flex-row">
-          <Button asChild size="sm" variant="secondary" wrap>
-            <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
-              <Ticket aria-hidden="true" className="size-4 shrink-0" />
-              {m.entryPackCheckoutTitle({}, { locale })}
-            </GuardedLink>
-          </Button>
-          <Button asChild size="sm" variant="secondary" wrap>
-            <GuardedLink href={`/${locale}${unlimitedPassCheckoutPath}`}>
-              <InfinityIcon aria-hidden="true" className="size-4 shrink-0" />
-              {m.unlimitedPassCheckoutTitle({}, { locale })}
-            </GuardedLink>
-          </Button>
-        </div>
+        purchasesEnabled && (
+          <div className="flex flex-col items-start gap-2 @xl:flex-row">
+            <Button asChild size="sm" variant="secondary" wrap>
+              <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
+                <Ticket aria-hidden="true" className="size-4 shrink-0" />
+                {m.entryPackCheckoutTitle({}, { locale })}
+              </GuardedLink>
+            </Button>
+            <Button asChild size="sm" variant="secondary" wrap>
+              <GuardedLink href={`/${locale}${unlimitedPassCheckoutPath}`}>
+                <InfinityIcon aria-hidden="true" className="size-4 shrink-0" />
+                {m.unlimitedPassCheckoutTitle({}, { locale })}
+              </GuardedLink>
+            </Button>
+          </div>
+        )
       }
       title={m.accountSectionPasses({}, { locale })}
       titleId="account-passes-title"
@@ -69,6 +76,7 @@ export function AccountPassesPanel({
         <AccountPassesBody
           locale={locale}
           packs={packs}
+          purchasesEnabled={purchasesEnabled}
           unlimitedPasses={unlimitedPasses}
         />
       </Suspense>
@@ -79,6 +87,7 @@ export function AccountPassesPanel({
 function AccountPassesBody({
   packs,
   locale,
+  purchasesEnabled = true,
   unlimitedPasses = [],
 }: PassesPanelProps) {
   const loaded = use(packs);
@@ -114,6 +123,7 @@ function AccountPassesBody({
         <PassGroup
           locale={locale}
           packs={active}
+          purchasesEnabled={purchasesEnabled}
           title={m.accountPassesActive({}, { locale })}
           unlimitedPasses={currentUnlimited}
         />
@@ -125,6 +135,7 @@ function AccountPassesBody({
         <PassGroup
           locale={locale}
           packs={past}
+          purchasesEnabled={purchasesEnabled}
           title={m.accountPassesPast({}, { locale })}
           unlimitedPasses={pastUnlimited}
         />
@@ -135,9 +146,12 @@ function AccountPassesBody({
         </p>
       )}
       {unlimitedPasses === "unavailable" && (
-        <p className="text-sm text-slate-600">
-          {m.accountUnlimitedPassesUnavailable({}, { locale })}
-        </p>
+        <>
+          <p className="text-sm text-slate-600">
+            {m.accountUnlimitedPassesUnavailable({}, { locale })}
+          </p>
+          <AccountUnlimitedRenewalUnavailable locale={locale} />
+        </>
       )}
     </div>
   );
@@ -237,11 +251,13 @@ function BoughtPassGifts({
 function PassGroup({
   locale,
   packs,
+  purchasesEnabled,
   title,
   unlimitedPasses,
 }: {
   readonly locale: Locale;
   readonly packs: readonly AccountEntryPack[];
+  readonly purchasesEnabled: boolean;
   readonly title: string;
   readonly unlimitedPasses: readonly AccountUnlimitedPass[];
 }) {
@@ -258,7 +274,11 @@ function PassGroup({
         ))}
         {unlimitedPasses.map((pass) => (
           <li key={pass.orderId}>
-            <AccountUnlimitedPassCard locale={locale} pass={pass} />
+            <AccountUnlimitedPassCard
+              locale={locale}
+              pass={pass}
+              purchasesEnabled={purchasesEnabled}
+            />
           </li>
         ))}
       </ul>

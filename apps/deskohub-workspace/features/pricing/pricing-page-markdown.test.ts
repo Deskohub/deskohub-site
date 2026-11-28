@@ -9,6 +9,7 @@ import { advertisedCatalogOfferings } from "@/features/checkout/public-offerings
 import { type Locale, locales, m } from "@/features/i18n";
 import { unlimitedPassOffers } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
+import type { PublicPageMarkdownSources } from "@/features/public-pages/public-page-markdown";
 import { serializeMarkdown } from "@/shared/markdown/markdown";
 import { markdownPlainText } from "@/shared/markdown/markdown.test-utils";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -21,21 +22,21 @@ const renderPricingPage = async (
   locale: Locale,
   offerings: ReadonlyArray<PublicOffering>,
   {
-    coworkPassesPublished = false,
+    pricingPasses,
     teamTablePrices = [],
   }: {
-    readonly coworkPassesPublished?: boolean;
+    readonly pricingPasses?: PublicPageMarkdownSources["pricingPasses"];
     readonly teamTablePrices?: ReadonlyArray<TeamTablePrice>;
   } = {}
 ) =>
   serializeMarkdown(
     await Effect.runPromise(
       pricingPageMarkdown(locale, {
-        coworkPassesPublished,
         isPublished: () => true,
         offerings: Effect.succeed(offerings),
         teamTablePrices: Effect.succeed(teamTablePrices),
         saleBanner: Effect.succeed(undefined),
+        pricingPasses,
       })
     )
   );
@@ -50,7 +51,7 @@ test("prints Team Table rates and a booking link alongside Unlimited membership"
   const locale = "en-US";
   const offerings = advertisedCatalogOfferings({ locale });
   const markdown = await renderPricingPage(locale, offerings, {
-    coworkPassesPublished: true,
+    pricingPasses: { offersAutoRenewal: false },
     teamTablePrices: [
       {
         seats: 4,
@@ -119,11 +120,45 @@ describe.each(locales)("pricingPageMarkdown in %s", (locale) => {
     );
   });
 
+  test("lists released entry packs and memberships with their prices", async () => {
+    const markdown = await renderPricingPage(
+      locale,
+      advertisedCatalogOfferings({ locale }),
+      { pricingPasses: { offersAutoRenewal: false } }
+    );
+    const text = markdownPlainText(markdown);
+
+    expect(headings(markdown, 2)).toContain(
+      m.entryPackDiscoveryTitle({}, { locale })
+    );
+    expect(headings(markdown, 2)).toContain(m.passUnlimited({}, { locale }));
+    expect(headings(markdown, 3)).toContain(
+      getPassTierName("reserved-desk-workstation", locale)
+    );
+    expect(markdown).toContain(
+      "https://workspace.deskohub.cz/passes/entry-pack?tier=open-space"
+    );
+    expect(markdown).toContain(
+      "https://workspace.deskohub.cz/passes/unlimited?tier=reserved-desk-workstation"
+    );
+    for (const cents of [
+      115_000, 219_000, 159_000, 309_000, 205_000, 399_000, 349_000, 599_000,
+      849_000, 69_000,
+    ]) {
+      expect(text).toContain(
+        formatMoney(currencyCZK(cents), locale).replace(/\s+/g, " ")
+      );
+    }
+    expect(text).toContain(m.reservationReservedDeskPerkCoffee({}, { locale }));
+    expect(text).not.toContain(
+      m.unlimitedPassDiscoveryAutoRenewal({ days: 30 }, { locale })
+    );
+  });
   test("names the membership and prices each tier for its validity period", async () => {
     const markdown = await renderPricingPage(
       locale,
       advertisedCatalogOfferings({ locale }),
-      { coworkPassesPublished: true }
+      { pricingPasses: { offersAutoRenewal: false } }
     );
     const text = markdownPlainText(markdown);
 
@@ -134,7 +169,21 @@ describe.each(locales)("pricingPageMarkdown in %s", (locale) => {
         { price: formatMoney(price, locale), days: validityDays },
         { locale }
       );
-      expect(text).toContain(`${tier} · ${cadence}`.replace(/\s+/g, " "));
+      expect(headings(markdown, 3)).toContain(tier);
+      expect(text).toContain(cadence.replace(/\s+/g, " "));
     }
   });
+});
+
+test("discloses optional 30-day renewal for a membership bought for yourself", async () => {
+  const locale = "en-US";
+  const markdown = await renderPricingPage(
+    locale,
+    advertisedCatalogOfferings({ locale }),
+    { pricingPasses: { offersAutoRenewal: true } }
+  );
+
+  expect(markdown).toContain(
+    "If you're buying a membership for yourself, you can choose automatic renewal every 30 days."
+  );
 });

@@ -184,7 +184,8 @@ export const passPaymentPayload = (
     key,
     hash,
   })),
-  ...(quote.product.kind === "unlimited" &&
+  ...(billing.purpose === "personal" &&
+    quote.product.kind === "unlimited" &&
     quote.disclosure.earlyStartRequest !== undefined && {
       unlimitedEarlyStartAccepted: true,
     }),

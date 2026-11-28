@@ -16,6 +16,9 @@ export const reservationIntentSchema = Schema.Struct({
   startDate: Schema.String,
   endDate: Schema.String,
   orderId: Schema.optional(Schema.String),
+  requestedAt: Schema.optional(Schema.String),
+  paymentStartedAt: Schema.optional(Schema.String),
+  paymentFulfilledAt: Schema.optional(Schema.String),
   reservationId: Schema.optional(Schema.String),
 });
 

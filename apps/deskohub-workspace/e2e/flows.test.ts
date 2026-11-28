@@ -22,9 +22,52 @@ import {
   workspaceE2EInstantNavigationSpecFlowByFile,
   workspaceE2EWorkflowFlowIds,
 } from "./flows";
-import { workspaceE2ECaseIds } from "./playwright-checkout/case-catalog";
+import {
+  unlimitedPassAutoRenewalCaseId,
+  workspaceE2ECaseIds,
+} from "./playwright-checkout/case-catalog";
 
 describe("Workspace E2E flow catalog", () => {
+  test("admits Unlimited renewal only by opt-in to payments", () => {
+    const payments = resolveWorkspaceE2EFlowSelection("payments");
+    const optedIn = { includeUnlimitedPassAutoRenewal: true };
+
+    expect(
+      isWorkspaceE2ECaseSelected(unlimitedPassAutoRenewalCaseId, payments)
+    ).toBe(false);
+    expect(
+      isWorkspaceE2ECaseSelected(unlimitedPassAutoRenewalCaseId, {
+        kind: "all",
+      })
+    ).toBe(false);
+    expect(
+      isWorkspaceE2ECaseSelected(
+        unlimitedPassAutoRenewalCaseId,
+        payments,
+        optedIn
+      )
+    ).toBe(true);
+    expect(
+      isWorkspaceE2ECaseSelected(
+        unlimitedPassAutoRenewalCaseId,
+        resolveWorkspaceE2EFlowSelection("account"),
+        optedIn
+      )
+    ).toBe(false);
+  });
+
+  test("excludes every other payment case from a manual Unlimited review", () => {
+    const payments = resolveWorkspaceE2EFlowSelection("payments");
+    expect(
+      workspaceE2ECaseIds.filter((caseId) =>
+        isWorkspaceE2ECaseSelected(caseId, payments, {
+          includeUnlimitedPassAutoRenewal: true,
+          unlimitedPassReviewOnly: true,
+        })
+      )
+    ).toEqual([unlimitedPassAutoRenewalCaseId]);
+  });
+
   test("matches the workflow flow catalog in order and short codes", () => {
     expect([...workspaceE2EFlowIds]).toEqual([...workspaceE2EWorkflowFlowIds]);
     const shortCodes = Object.values(workspaceE2EFlowShortCodes);

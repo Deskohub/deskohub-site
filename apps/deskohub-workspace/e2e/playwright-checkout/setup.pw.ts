@@ -15,6 +15,7 @@ import {
 import {
   makeWorkspaceE2EEnvironment,
   nightlyCasesEnabled,
+  unlimitedPassReviewOnly,
   workspaceE2EFlowSelection,
 } from "../e2e-env";
 import { needsWorkspaceE2ECheckoutPreparation } from "../flows";
@@ -28,6 +29,7 @@ import { E2ETelemetryService } from "../services/telemetry";
 import {
   isWorkspaceE2EOfficeCaseId,
   isWorkspaceE2ETableCaseId,
+  unlimitedPassAutoRenewalCaseId,
   workspaceE2ECaseIds,
 } from "./case-catalog";
 import {
@@ -67,10 +69,11 @@ test("prepare the workspace checkout run", async ({ browser }) => {
   );
 
   const flowSelection = workspaceE2EFlowSelection(environment);
-  const prepareCheckoutCases = needsWorkspaceE2ECheckoutPreparation(
-    flowSelection,
-    { includeNightlyCases: nightlyCasesEnabled(environment) }
-  );
+  const prepareCheckoutCases =
+    !unlimitedPassReviewOnly(environment) &&
+    needsWorkspaceE2ECheckoutPreparation(flowSelection, {
+      includeNightlyCases: nightlyCasesEnabled(environment),
+    });
 
   const preparationResult = await withWorkspaceE2ERuntime(
     environment,
@@ -174,6 +177,7 @@ test("prepare the workspace checkout run", async ({ browser }) => {
   if (preparationResult) {
     const expectedCaseIds = workspaceE2ECaseIds.filter(
       (caseId) =>
+        caseId !== unlimitedPassAutoRenewalCaseId &&
         (preparationResult.preparation.office !== undefined ||
           !isWorkspaceE2EOfficeCaseId(caseId)) &&
         (preparationResult.preparation.table !== undefined ||

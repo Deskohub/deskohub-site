@@ -21,6 +21,7 @@ export function AccountPage({
   loadInvoiceHistory,
   loadPasses,
   locale,
+  passPurchasesEnabled = true,
   state,
   unlimitedPasses = [],
 }: {
@@ -32,6 +33,7 @@ export function AccountPage({
   readonly loadInvoiceHistory: () => Promise<CustomerInvoiceHistory>;
   readonly loadPasses?: () => Promise<AccountPasses>;
   readonly locale: Locale;
+  readonly passPurchasesEnabled?: boolean;
   readonly state: CustomerAccountPageState;
   readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
@@ -64,6 +66,7 @@ export function AccountPage({
             <AccountPassesPanel
               locale={locale}
               packs={entryPacks}
+              purchasesEnabled={passPurchasesEnabled}
               unlimitedPasses={unlimitedPasses}
             />
           )
@@ -72,7 +75,7 @@ export function AccountPage({
           state,
           locale,
           unlimitedPasses,
-          entryPacks
+          passPurchasesEnabled ? entryPacks : undefined
         )}
       />
     </>

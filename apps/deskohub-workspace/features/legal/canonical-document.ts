@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { Predicate } from "effect";
 import { Children, isValidElement, type ReactNode } from "react";
 import type { LegalDocumentContent } from "./content";
+
+export const legalDocumentHashAlgorithm = "sha256";
 
 function reactNodeToCanonicalText(node: ReactNode): string {
   if (node === null || node === undefined || Predicate.isBoolean(node)) {
@@ -35,4 +38,11 @@ export function getCanonicalLegalDocument(
       body: section.body.map(reactNodeToCanonicalText),
     })),
   });
+}
+
+/** Hashes the text and metadata that identify the accepted legal document. */
+export function hashLegalDocument(document: LegalDocumentContent): string {
+  return createHash(legalDocumentHashAlgorithm)
+    .update(getCanonicalLegalDocument(document))
+    .digest("hex");
 }

@@ -15,6 +15,7 @@ import {
   EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email";
+import { NexiService } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
@@ -27,15 +28,21 @@ import {
   orders,
   passPurchases,
   paymentAttempts,
+  unlimitedAutoRenewalAuthorizations,
 } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { CustomerAccountLinkRepository } from "@/features/account/backend/customer-account-link.repository";
 import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
-import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
+import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
+import {
+  signedInAuthentication,
+  testSessionProfile,
+} from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -50,6 +57,7 @@ import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkou
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
+import { PaymentProvidersFromNexi } from "@/features/checkout/backend/payment/payment-providers";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
@@ -57,12 +65,18 @@ import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { m } from "@/features/i18n";
-import { getPaymentSubmitLegalEvidence } from "@/features/legal/payment-submit-evidence";
+import {
+  getPaymentSubmitLegalDocuments,
+  getPaymentSubmitLegalEvidence,
+} from "@/features/legal/payment-submit-evidence";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
-import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import {
+  defaultReservationBillingSelection,
+  type ReservationBillingSelection,
+} from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { sealedStateKeyIdSchema } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -78,10 +92,10 @@ import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
-  getPassPurchasePriceFingerprint,
   payForEntryPack,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
+import { getPassPurchasePriceFingerprint } from "./entry-pack-quote";
 import {
   canConfirmUnlimitedPass,
   settlePassPurchase,
@@ -90,6 +104,12 @@ import {
   reconcilePassPurchases,
   reconcileUnlimitedPassReleases,
 } from "./pass-purchase-reconciliation";
+import { readUnlimitedAutoRenewalDisclosure } from "./unlimited-auto-renewal";
+import { recordUnlimitedAutoRenewalAuthorization } from "./unlimited-auto-renewal-ledger";
+import {
+  cancelUnlimitedAutoRenewal,
+  listUnlimitedAutoRenewals,
+} from "./unlimited-auto-renewal-management";
 import {
   confirmUnlimitedPassDays,
   createUnlimitedPassHolds,
@@ -109,6 +129,10 @@ afterAll(async () => {
 });
 
 const it = test.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL);
+const renewalPreviewEnabled = mock(() => false);
+mock.module("./unlimited-auto-renewal-preview.server", () => ({
+  isUnlimitedAutoRenewalPreviewEnabled: renewalPreviewEnabled,
+}));
 const customerId = DotyposCustomerIdSchema.make("123");
 const tableId = DotyposTableIdSchema.make("42");
 const table = Schema.decodeUnknownSync(DotyposTableSchema)({
@@ -128,17 +152,28 @@ const price = currencyCZK(599_000);
 const recordPurchase = (
   now: Temporal.Instant,
   startDaysAhead = 10,
-  tier: "reserved-desk" | "open-space" = "reserved-desk"
+  tier: "reserved-desk" | "open-space" = "reserved-desk",
+  autoRenew?: true,
+  previous?: Pick<
+    typeof passPurchases.$inferSelect,
+    "id" | "buyerAccountId" | "validUntil"
+  >
 ) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
-    const accountId = customerAccountIdSchema.make(crypto.randomUUID());
-    yield* db.insert(customerAccounts).values({ id: accountId });
-    const start = getCurrentWorkspaceDate(now).add({ days: startDaysAhead });
+    const accountId =
+      previous?.buyerAccountId ??
+      customerAccountIdSchema.make(crypto.randomUUID());
+    if (!previous) yield* db.insert(customerAccounts).values({ id: accountId });
+    const start = previous
+      ? Temporal.PlainDate.from(previous.validUntil)
+      : getCurrentWorkspaceDate(now).add({ days: startDaysAhead });
     return yield* transaction(
       recordUnlimitedPassOrder({
         orderId: orderIdSchema.make(crypto.randomUUID()),
         locale: "en-US",
+        ...(autoRenew && { autoRenew }),
+        ...(previous && { renewsPassId: previous.id }),
         buyer: { accountId, customerId },
         holder: { accountId, customerId },
         createdAt: now,
@@ -217,6 +252,7 @@ const servicesFor = (dotypos: typeof DotyposService.Service) => {
     Layer.mock(EmailServiceTag, {}),
     Layer.mock(AccountingDocumentSnapshots, {
       findPassPurchase: () => Effect.undefined,
+      recordPassPurchase: () => Effect.void,
     }),
     Layer.mock(InvoiceRepository, { issueEntryPack: () => Effect.undefined }),
     Layer.mock(InvoiceEmailDeliveryService, {}),
@@ -462,6 +498,421 @@ for (const { tier, closesDuring, daysAhead } of [
     );
   });
 }
+
+it("binds Unlimited renewal consent to the paid attempt and lets only the owner stop it", async () => {
+  const now = Temporal.Instant.from("2033-02-01T12:00:00Z");
+  const databaseForRenewal = requireTestDatabase(database);
+  let providerSessions = 0;
+  renewalPreviewEnabled.mockReturnValue(true);
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(now.epochMilliseconds);
+        const { db, transaction } = yield* WorkspaceDatabase;
+        const purchase = yield* recordPurchase(now, 10, "reserved-desk", true);
+        const accountId = purchase.buyerAccountId;
+        const otherBuyer = customerAccountIdSchema.make(crypto.randomUUID());
+        yield* db.insert(customerAccounts).values({ id: otherBuyer });
+        const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+          purchase.quote
+        );
+        const fingerprint = getPassPurchasePriceFingerprint(quote);
+        const renewal = readUnlimitedAutoRenewalDisclosure(purchase);
+        expect(renewal).toMatchObject({
+          nextRenewalOn: purchase.validUntil,
+          amount: price,
+        });
+        if (!renewal) throw new Error("Missing renewal agreement");
+        const { termsPath, ...authorization } = renewal;
+        const session = yield* Effect.flatMap(
+          CustomerAuthentication,
+          ({ currentUser }) => currentUser
+        ).pipe(Effect.provide(signedInAuthentication(accountId)));
+        if (!session) throw new Error("Missing synthetic session");
+        yield* db.insert(authUser).values([
+          {
+            id: accountId,
+            email: session.email,
+            name: "Synthetic Unlimited Buyer",
+            emailVerified: true,
+          },
+          {
+            id: otherBuyer,
+            email: testEmailAddress("other-unlimited-buyer"),
+            name: "Synthetic Other Buyer",
+            emailVerified: true,
+          },
+        ]);
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        const checkoutServices = Layer.mergeAll(
+          Layer.mock(CurrentCustomerAccount, {
+            requireActive: Effect.succeed(session),
+          }),
+          Layer.mock(WorkspaceFeatureFlagService, {
+            isEnabled: () => Effect.succeed(true),
+          }),
+          Layer.succeed(
+            OrderPaymentHandlers,
+            OrderPaymentHandlers.make({ "pass-purchase": handler }, () =>
+              Effect.succeed("pass-purchase")
+            )
+          ),
+          Layer.mock(DiscountService, {
+            affirmDisplayedDiscounts: () =>
+              Effect.succeed({
+                quote,
+                commitment: makeDiscountCommitment({
+                  product: { kind: "unlimited", tier: purchase.tier },
+                  firstServiceDate: purchase.validFrom,
+                  applications: [],
+                }),
+              }),
+          }),
+          Layer.mock(CustomerAccountContactService, {
+            linkedContact: () =>
+              Effect.succeed({
+                accountId,
+                dotyposCustomerId: customerId,
+                email: session.email,
+                name: "Synthetic Unlimited Buyer",
+                phone: null,
+              }),
+          }),
+          Layer.mock(CheckoutAnalytics, { paymentStarted: () => Effect.void }),
+          Layer.mock(LatePaymentVerificationService, {}),
+          LegalEvidenceEventRepository.Default.pipe(
+            Layer.provide(databaseForRenewal.layer)
+          ),
+          PaymentProvidersFromNexi.pipe(
+            Layer.provide(
+              Layer.mock(NexiService, {
+                createHostedPaymentPage: ({ orderId }) =>
+                  Effect.sync(() => {
+                    providerSessions += 1;
+                    return {
+                      orderId,
+                      hostedPage: "https://nexi.test/payment",
+                      securityToken: "synthetic-session",
+                    };
+                  }),
+              })
+            )
+          )
+        );
+        const accountSectionsFor = (id: typeof accountId) =>
+          CustomerAccountSections.Default.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                CustomerAccountLinkRepository.Default.pipe(
+                  Layer.provide(databaseForRenewal.layer)
+                ),
+                WorkspaceDatabaseAdvisoryLock.makeLayer(
+                  databaseForRenewal.databasePool
+                ),
+                signedInAuthentication(id)
+              )
+            )
+          );
+        const pay = (
+          renewalAuthorization: typeof authorization | undefined,
+          displayedPriceFingerprint = fingerprint,
+          billing: ReservationBillingSelection = defaultReservationBillingSelection
+        ) =>
+          payForEntryPack({
+            orderId: purchase.id,
+            productKind: "unlimited",
+            accepted: true,
+            billing,
+            acceptedDocuments: getPaymentSubmitLegalDocuments(purchase.locale),
+            displayedPriceFingerprint,
+            ...(renewalAuthorization && { renewalAuthorization }),
+          }).pipe(
+            Effect.provide(
+              Layer.merge(checkoutServices, accountSectionsFor(accountId))
+            )
+          );
+
+        for (const invalid of [
+          undefined,
+          { ...authorization, amount: currencyCZK(1) },
+          { ...authorization, termsHash: "0".repeat(64) },
+          { ...authorization, nextRenewalOn: purchase.validFrom },
+        ]) {
+          expect(yield* Effect.result(pay(invalid))).toMatchObject({
+            failure: { reason: "terms-changed", renewal },
+          });
+        }
+        expect(yield* pay(authorization, "0".repeat(64))).toMatchObject({
+          status: "pricing_changed",
+        });
+        yield* createUnlimitedPassHolds(purchase);
+        expect(yield* Effect.result(pay(authorization))).toMatchObject({
+          failure: {
+            reason: "terms-changed",
+            earlyStartRequired: true,
+            renewal,
+          },
+        });
+        expect((yield* readState(purchase.id)).attempts).toHaveLength(0);
+        expect(providerSessions).toBe(0);
+
+        // Keep evidence from an expired attempt so cancellation must select the paid attempt.
+        const expiredAt = now.subtract({ minutes: 1 });
+        const expiredId = yield* recordAttempt(
+          purchase.id,
+          "expired",
+          expiredAt
+        );
+        yield* transaction(
+          recordUnlimitedAutoRenewalAuthorization(
+            expiredId,
+            purchase.holderVersion,
+            renewal,
+            fingerprint,
+            expiredAt
+          )
+        );
+        expect(
+          yield* pay(authorization, fingerprint, {
+            purpose: "business",
+            invoice: "required",
+            buyer: {
+              kind: "business",
+              legalName: "Synthetic Unlimited Company",
+              companyId: "12345679",
+              address: {
+                line1: "Fixture Street 1",
+                city: "Praha",
+                postalCode: "18000",
+                country: "CZ",
+              },
+            },
+          })
+        ).toMatchObject({ status: "hosted" });
+        expect(providerSessions).toBe(1);
+        const { order, attempts } = yield* readState(purchase.id);
+        const attempt = attempts.find(
+          ({ id }) => id === order?.activePaymentAttemptId
+        );
+        if (!attempt) throw new Error("Missing payment attempt");
+        const evidence = db
+          .select()
+          .from(unlimitedAutoRenewalAuthorizations)
+          .where(
+            eq(unlimitedAutoRenewalAuthorizations.paymentAttemptId, attempt.id)
+          );
+        expect((yield* evidence)[0]).toMatchObject({
+          amountValue: price.value,
+          nextRenewalOn: purchase.validUntil,
+          termsHash: authorization.termsHash,
+          termsPath,
+          quoteFingerprint: fingerprint,
+          cancelledAt: null,
+        });
+        expect((yield* listUnlimitedAutoRenewals(accountId)).size).toBe(0);
+
+        yield* handler.markPaid({
+          orderId: purchase.id,
+          id: attempt.id,
+          paidAt: now,
+        });
+        expect((yield* listUnlimitedAutoRenewals(accountId)).size).toBe(0);
+        yield* confirmUnlimitedPassDays(purchase);
+        expect(
+          (yield* settlePassPurchase(purchase.id, attempt.id))?.status
+        ).toBe("active");
+        expect(
+          (yield* listUnlimitedAutoRenewals(accountId)).get(purchase.id)
+        ).toEqual({
+          status: "pending",
+          nextRenewalOn: purchase.validUntil,
+          amount: price,
+        });
+        expect((yield* listUnlimitedAutoRenewals(otherBuyer)).size).toBe(0);
+        expect(
+          yield* cancelUnlimitedAutoRenewal(otherBuyer, purchase.id).pipe(
+            Effect.provide(accountSectionsFor(otherBuyer))
+          )
+        ).toBe("unavailable");
+
+        const stop = cancelUnlimitedAutoRenewal(accountId, purchase.id).pipe(
+          Effect.provide(accountSectionsFor(accountId))
+        );
+        expect(yield* stop).toBe("cancelled");
+        const [cancelled] = yield* evidence;
+        expect(cancelled?.cancelledAt).not.toBeNull();
+        expect(yield* stop).toBe("cancelled");
+        expect((yield* evidence)[0]?.cancelledAt).toEqual(
+          cancelled?.cancelledAt
+        );
+        const [expiredEvidence] = yield* db
+          .select({
+            cancelledAt: unlimitedAutoRenewalAuthorizations.cancelledAt,
+          })
+          .from(unlimitedAutoRenewalAuthorizations)
+          .where(
+            eq(unlimitedAutoRenewalAuthorizations.paymentAttemptId, expiredId)
+          );
+        expect(expiredEvidence?.cancelledAt).toBeNull();
+        expect(
+          (yield* listUnlimitedAutoRenewals(accountId)).get(purchase.id)?.status
+        ).toBe("cancelled");
+        expect((yield* readState(purchase.id)).purchase).toMatchObject({
+          status: "active",
+          validUntil: purchase.validUntil,
+          accessEndsOn: null,
+        });
+        expect(
+          (yield* readUnlimitedPassDays(purchase.id)).every(
+            ({ reservationState }) => reservationState === "confirmed"
+          )
+        ).toBe(true);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(servicesFor(provider.service), TestClock.layer())
+        )
+      )
+    );
+  } finally {
+    renewalPreviewEnabled.mockReturnValue(false);
+  }
+});
+
+it.each([
+  ["paid", "2031-01-08T12:00:00Z", false],
+  ["partially refunded", "2031-05-08T12:00:00Z", true],
+] as const)(
+  "checks a %s renewal intent when a prepaid successor activates",
+  async (_label, currentTime, refunded) => {
+    const now = Temporal.Instant.from(currentTime);
+    renewalPreviewEnabled.mockReturnValue(true);
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(now.epochMilliseconds);
+          const { db, transaction } = yield* WorkspaceDatabase;
+          const source = yield* recordPurchase(now, 5, "reserved-desk", true);
+          yield* db.insert(authUser).values({
+            id: source.buyerAccountId,
+            email: testEmailAddress(
+              refunded
+                ? "manual-renewal-refunded-buyer"
+                : "manual-renewal-buyer"
+            ),
+            name: "Synthetic Renewal Buyer",
+            emailVerified: true,
+          });
+          const paid = (purchase: typeof source) =>
+            Effect.gen(function* () {
+              const disclosure = readUnlimitedAutoRenewalDisclosure(purchase);
+              if (!disclosure) throw new Error("Missing renewal disclosure");
+              const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+              const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+                purchase.quote
+              );
+              yield* transaction(
+                recordUnlimitedAutoRenewalAuthorization(
+                  attemptId,
+                  purchase.holderVersion,
+                  disclosure,
+                  getPassPurchasePriceFingerprint(quote),
+                  now
+                )
+              );
+              yield* db
+                .update(orders)
+                .set({
+                  paymentState: "paid",
+                  activePaymentAttemptId: attemptId,
+                  paidAt: now,
+                })
+                .where(eq(orders.id, purchase.id));
+              yield* settlePassPurchase(purchase.id);
+              return attemptId;
+            });
+
+          yield* createUnlimitedPassHolds(source);
+          const firstAttempt = yield* paid(source);
+          yield* confirmUnlimitedPassDays(source);
+          expect(
+            (yield* settlePassPurchase(source.id, firstAttempt))?.status
+          ).toBe("active");
+          const currentPlans = listUnlimitedAutoRenewals(source.buyerAccountId);
+          expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
+          if (refunded) {
+            yield* db
+              .update(paymentAttempts)
+              .set({
+                refundState: "refunded",
+                refundedAmountValue: price.value / 2,
+                refundedAt: now,
+              })
+              .where(eq(paymentAttempts.id, firstAttempt));
+          }
+          const previousStatus = refunded ? undefined : "pending";
+
+          const successor = yield* recordPurchase(
+            now,
+            0,
+            "reserved-desk",
+            true,
+            source
+          );
+          expect(successor).toMatchObject({
+            autoRenew: true,
+            renewsPassId: source.id,
+            validFrom: source.validUntil,
+          });
+          yield* createUnlimitedPassHolds(successor);
+          expect((yield* currentPlans).get(source.id)?.status).toBe(
+            previousStatus
+          );
+          const secondAttempt = yield* paid(successor);
+          expect((yield* currentPlans).get(source.id)?.status).toBe(
+            previousStatus
+          );
+          expect((yield* currentPlans).has(successor.id)).toBe(false);
+
+          yield* confirmUnlimitedPassDays(successor);
+          expect(
+            (yield* settlePassPurchase(successor.id, secondAttempt))?.status
+          ).toBe("active");
+          expect(
+            yield* settlePassPurchase(successor.id, secondAttempt)
+          ).toBeUndefined();
+          const plans = yield* currentPlans;
+          expect(plans.get(source.id)?.status).toBe(
+            refunded ? undefined : "cancelled"
+          );
+          expect(plans.get(successor.id)).toEqual({
+            status: "pending",
+            nextRenewalOn: successor.validUntil,
+            amount: price,
+          });
+          const [stopped] = yield* db
+            .select()
+            .from(unlimitedAutoRenewalAuthorizations)
+            .where(
+              eq(
+                unlimitedAutoRenewalAuthorizations.paymentAttemptId,
+                firstAttempt
+              )
+            );
+          expect(stopped).toMatchObject({
+            prepaidSuccessorOrderId: refunded ? null : successor.id,
+            cancelledAt: null,
+          });
+        }).pipe(
+          Effect.provide(
+            Layer.merge(servicesFor(provider.service), TestClock.layer())
+          )
+        )
+      );
+    } finally {
+      renewalPreviewEnabled.mockReturnValue(false);
+    }
+  }
+);
 
 it("recovers a verified capture after an interrupted read of replacement holds", async () => {
   const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });

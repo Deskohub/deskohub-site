@@ -14,7 +14,7 @@ import {
 const date = plainDateStringSchema.make;
 
 describe("Unlimited pass terms", () => {
-  test("asks for early-start consent only inside the 14-day window", () => {
+  test("asks consumers for early-start consent only inside the 14-day window", () => {
     const agreedOn = Temporal.PlainDate.from("2027-03-16");
     expect(unlimitedPassRequiresEarlyStart(date("2027-03-30"), agreedOn)).toBe(
       true
@@ -22,6 +22,9 @@ describe("Unlimited pass terms", () => {
     expect(unlimitedPassRequiresEarlyStart(date("2027-03-31"), agreedOn)).toBe(
       false
     );
+    expect(
+      unlimitedPassRequiresEarlyStart(date("2027-03-16"), agreedOn, "business")
+    ).toBe(false);
   });
 
   test("asks for early-start consent through the extended withdrawal date", () => {

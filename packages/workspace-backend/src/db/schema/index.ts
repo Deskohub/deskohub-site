@@ -172,6 +172,7 @@ export {
   standaloneAccessCodeAttemptEvents,
 } from "./standalone-access-code-attempt-events";
 export { teamTableHoldClaims } from "./team-table-hold-claims";
+export { unlimitedAutoRenewalAuthorizations } from "./unlimited-auto-renewal-authorizations";
 export { unlimitedPassDayMoves } from "./unlimited-pass-day-moves";
 export { unlimitedPassSupersessions } from "./unlimited-pass-supersessions";
 export {

@@ -675,6 +675,7 @@ function PassPurchaseFlow({
           )}
           {step === "pay" && purchase !== undefined && (
             <PassPurchaseReview
+              showEarlyStart={purchase.billing.purpose === "personal"}
               quote={purchase.quote}
               recipient={details.gift ? details.holderEmail.trim() : undefined}
               buyer={

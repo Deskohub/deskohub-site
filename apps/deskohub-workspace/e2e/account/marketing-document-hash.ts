@@ -1,8 +1,8 @@
 import { Predicate } from "effect";
 import type { ReactNode } from "react";
 import { cloneElement, createElement, Fragment, isValidElement } from "react";
+import { hashLegalDocument } from "@/features/legal/canonical-document";
 import { getLegalDocument } from "@/features/legal/content";
-import { hashLegalDocument } from "@/features/legal/document-version";
 
 const unsupportedNodeMessage =
   "Unsupported React node shape in the marketing communications document";

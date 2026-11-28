@@ -50,6 +50,7 @@ export const passPurchases = pgTable(
       .references(() => customerAccounts.id),
     holderVersion: integer("holder_version").notNull().default(0),
     renewsPassId: text("renews_pass_id").$type<OrderId>(),
+    autoRenew: boolean("auto_renew").notNull().default(false),
     product: text("product").notNull().$type<"entry-pack" | "unlimited">(),
     tier: text("tier").notNull().$type<PassTier>(),
     entryCount: integer("entry_count").$type<EntryPackSize>(),
@@ -87,6 +88,10 @@ export const passPurchases = pgTable(
       "pass_purchases_renewal_check",
       sql`${t.renewsPassId} is null or (${t.product} = 'unlimited'
         and ${t.renewsPassId} <> ${t.id})`
+    ),
+    check(
+      "pass_purchases_auto_renew_check",
+      sql`not ${t.autoRenew} or ${t.product} = 'unlimited'`
     ),
     check(
       "pass_purchases_product_check",

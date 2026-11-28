@@ -202,9 +202,10 @@ export interface CreateDotyposReservationInput
 export interface SetMatchingDotyposReservationStatusInput {
   readonly reservationId: DotyposReservationId;
   readonly status: "CONFIRMED" | "CANCELLED";
+  /** Requires this source status on the strong ETag version used for a new PATCH. */
+  readonly expectedCurrentStatus?: DotyposReservationStatus;
   readonly expectedBooking: DotyposReservationBooking;
   readonly expectedNoteLine: string;
-  readonly expectedCurrentStatus?: "NEW" | "CONFIRMED";
 }
 
 export interface ReassignDotyposReservationCustomerInput {

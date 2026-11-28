@@ -1,4 +1,4 @@
-import { Clock, KeyRound, Monitor, Wifi } from "lucide-react";
+import { Clock, Coffee, KeyRound, Monitor, Wifi } from "lucide-react";
 import Image from "next/image";
 import { type ReactNode, useId } from "react";
 import openSpaceArtwork from "@/features/cowork/assets/open-space.png";
@@ -10,7 +10,7 @@ import {
   ReservationTypeOption,
 } from "@/features/reservation/components/reservation-type-input";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { type PassTier, passTiers } from "../pass-offer";
+import { type PassProduct, type PassTier, passTiers } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 
 const artwork = {
@@ -22,17 +22,21 @@ const artwork = {
 export function PassTierInput({
   locale,
   className,
+  kind,
   tier,
   priceForTier,
   onChange,
 }: {
   readonly locale: Locale;
   readonly className?: string;
+  readonly kind: PassProduct["kind"];
   readonly tier: PassTier;
   readonly priceForTier: (tier: PassTier) => ReactNode;
   readonly onChange: (tier: PassTier) => void;
 }) {
   const labelId = useId();
+  const unlimited = kind === "unlimited";
+  const { openSpaceUsableUntil: until } = workspaceSiteConstants.openingHours;
   return (
     <fieldset>
       <legend
@@ -52,20 +56,36 @@ export function PassTierInput({
         onChange={onChange}
       >
         {passTiers.map((option) => {
-          const description = {
-            "open-space": m.reservationOpenSpaceBulletDesk(
-              {
-                until: workspaceSiteConstants.openingHours.openSpaceUsableUntil,
-              },
-              { locale }
-            ),
-            "reserved-desk": m.reservationReservedDeskBulletDesk(
-              {},
-              { locale }
-            ),
-            "reserved-desk-workstation":
-              m.entryPackCheckoutWorkstationDescription({}, { locale }),
-          }[option];
+          const description = unlimited
+            ? {
+                "open-space": m.unlimitedPassDiscoveryOpenSpaceDescription(
+                  { until },
+                  { locale }
+                ),
+                "reserved-desk":
+                  m.unlimitedPassDiscoveryReservedDeskDescription(
+                    {},
+                    { locale }
+                  ),
+                "reserved-desk-workstation":
+                  m.unlimitedPassDiscoveryWorkstationDescription(
+                    {},
+                    { locale }
+                  ),
+              }[option]
+            : {
+                "open-space": m.reservationOpenSpaceBulletDesk(
+                  { until },
+                  { locale }
+                ),
+                "reserved-desk": m.reservationReservedDeskBulletDesk(
+                  {},
+                  { locale }
+                ),
+                "reserved-desk-workstation":
+                  m.entryPackCheckoutWorkstationDescription({}, { locale }),
+              }[option];
+          const openSpace = option === "open-space";
           return (
             <ReservationTypeOption
               key={option}
@@ -83,23 +103,39 @@ export function PassTierInput({
               <span className="mb-12 block max-w-40 text-sm leading-5 text-navy-blue/75">
                 {description}
               </span>
-              <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
-                {option === "open-space" ? (
-                  <Wifi size={16} />
+              {openSpace && (
+                <>
+                  <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
+                    <Wifi size={16} />
+                    {m.reservationOpenSpacePerkWifi({}, { locale })}
+                  </span>
+                  {!unlimited && (
+                    <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
+                      <Clock size={16} />
+                      {m.entryPackCheckoutFreeDesk({}, { locale })}
+                    </span>
+                  )}
+                </>
+              )}
+              {!openSpace &&
+                (unlimited ? (
+                  <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
+                    <Coffee size={16} />
+                    {m.reservationReservedDeskPerkCoffee({}, { locale })}
+                  </span>
                 ) : (
-                  <KeyRound size={16} />
-                )}
-                {option === "open-space"
-                  ? m.reservationOpenSpacePerkWifi({}, { locale })
-                  : m.reservationReservedDeskPerkAccess({}, { locale })}
-              </span>
-              <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
-                <Clock size={16} />
-                {option === "open-space"
-                  ? m.entryPackCheckoutFreeDesk({}, { locale })
-                  : m.entryPackCheckoutDeskAllDay({}, { locale })}
-              </span>
-              {option === "reserved-desk-workstation" && (
+                  <>
+                    <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
+                      <KeyRound size={16} />
+                      {m.reservationReservedDeskPerkAccess({}, { locale })}
+                    </span>
+                    <span className="mb-2 flex items-center gap-2 text-sm text-navy-blue/75">
+                      <Clock size={16} />
+                      {m.entryPackCheckoutDeskAllDay({}, { locale })}
+                    </span>
+                  </>
+                ))}
+              {!unlimited && option === "reserved-desk-workstation" && (
                 <span className="flex items-center gap-2 text-sm text-navy-blue/75">
                   <Monitor size={16} />
                   {m.entryPackCheckoutMonitors({}, { locale })}
